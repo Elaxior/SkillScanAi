@@ -1,0 +1,25 @@
+# Dependencies
+node_modules
+
+# Build outputs
+.next
+out
+build
+dist
+
+# Cache
+.cache
+
+# Auto-generated
+*.lock
+package-lock.json
+
+# Environment files
+.env*
+
+# IDE
+.idea
+.vscode
+
+# Misc
+*.md
