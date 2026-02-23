@@ -41,49 +41,49 @@ interface UseMetricCalculationResult {
 export function useMetricCalculation(): UseMetricCalculationResult {
   const [isCalculating, setIsCalculating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
-  // Get data from stores
+
+  // Get stable references from stores (these don't change)
   const selectedSport = useUserStore((state) => state.selectedSport);
   const selectedAction = useUserStore((state) => state.selectedAction);
-  const smoothedLandmarks = useSessionStore((state) => state.smoothedLandmarks);
-  const smoothedFrames = smoothedLandmarks.map((f) => f.landmarks);
-  const keyframes = useSessionStore((state) => state.keyframes);
-  const fps = useSessionStore((state) => state.fps);
   const setMetrics = useSessionStore((state) => state.setMetrics);
-  
+
   const sportSupported = isSportSupported(selectedSport || '');
-  
+
   const calculateMetrics = useCallback((): MetricResult | null => {
     setError(null);
-    
+
+    // Read fresh state at call time to avoid stale closure
+    const { smoothedLandmarks, keyframes, fps } = useSessionStore.getState();
+    const smoothedFrames = smoothedLandmarks.map((f) => f.landmarks);
+
     // Validate prerequisites
     if (!selectedSport) {
       setError('No sport selected');
       return null;
     }
-    
+
     if (!selectedAction) {
       setError('No action selected');
       return null;
     }
-    
+
     if (!sportSupported) {
       setError(`Sport "${selectedSport}" is not supported`);
       return null;
     }
-    
+
     if (!smoothedFrames || smoothedFrames.length === 0) {
       setError('No pose data available. Please process a video first.');
       return null;
     }
-    
+
     if (!fps || fps <= 0) {
       setError('Invalid FPS. Please re-process the video.');
       return null;
     }
-    
+
     setIsCalculating(true);
-    
+
     try {
       const metrics = calculateSportMetrics(selectedSport, {
         smoothedFrames,
@@ -91,10 +91,10 @@ export function useMetricCalculation(): UseMetricCalculationResult {
         fps,
         action: selectedAction,
       });
-      
+
       // Store metrics in session
       setMetrics(metrics);
-      
+
       setIsCalculating(false);
       return metrics;
     } catch (err) {
@@ -107,12 +107,9 @@ export function useMetricCalculation(): UseMetricCalculationResult {
     selectedSport,
     selectedAction,
     sportSupported,
-    smoothedFrames,
-    keyframes,
-    fps,
     setMetrics,
   ]);
-  
+
   return {
     calculateMetrics,
     isCalculating,

@@ -28,44 +28,47 @@ export function useScoringEngine(): UseScoringEngineResult {
   const [isCalculating, setIsCalculating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<ScoringResult | null>(null);
-  
+
   // Get data from stores
   const selectedSport = useUserStore((state) => state.selectedSport);
   const selectedAction = useUserStore((state) => state.selectedAction);
-  const metrics = useSessionStore((state) => state.metrics);
   const setScore = useSessionStore((state) => state.setScore);
   const setScoreBreakdown = useSessionStore((state) => state.setScoreBreakdown);
-  
+  const setScoreWithDetails = useSessionStore((state) => state.setScoreWithDetails);
+
   const calculateScore = useCallback((): ScoringResult | null => {
     setError(null);
-    
+
     // Validate prerequisites
     if (!selectedSport) {
       setError('No sport selected');
       return null;
     }
-    
+
     if (!selectedAction) {
       setError('No action selected');
       return null;
     }
-    
-    if (!metrics || Object.keys(metrics).length === 0) {
+
+    // Read fresh metrics from store to avoid stale closure
+    const currentMetrics = useSessionStore.getState().metrics;
+
+    if (!currentMetrics || Object.keys(currentMetrics).length === 0) {
       setError('No metrics available for scoring');
       return null;
     }
-    
+
     setIsCalculating(true);
-    
+
     try {
       let result: ScoringResult;
-      
+
       // Route to appropriate sport scoring function
       switch (selectedSport) {
         case 'basketball':
-          result = calculateBasketballScore(metrics, selectedAction);
+          result = calculateBasketballScore(currentMetrics, selectedAction);
           break;
-        
+
         // TODO: Add other sports as they're implemented
         case 'volleyball':
         case 'badminton':
@@ -74,18 +77,17 @@ export function useScoringEngine(): UseScoringEngineResult {
           setError(`Scoring for ${selectedSport} is not yet implemented`);
           setIsCalculating(false);
           return null;
-        
+
         default:
           setError(`Unknown sport: ${selectedSport}`);
           setIsCalculating(false);
           return null;
       }
-      
-      // Store results
-      setScore(result.overallScore);
-      setScoreBreakdown(result.breakdown);
+
+      // Store results atomically (score + breakdown + confidence)
+      setScoreWithDetails(result.overallScore, result.breakdown, result.confidence);
       setLastResult(result);
-      
+
       setIsCalculating(false);
       return result;
     } catch (err) {
@@ -94,8 +96,8 @@ export function useScoringEngine(): UseScoringEngineResult {
       setIsCalculating(false);
       return null;
     }
-  }, [selectedSport, selectedAction, metrics, setScore, setScoreBreakdown]);
-  
+  }, [selectedSport, selectedAction, setScore, setScoreBreakdown, setScoreWithDetails]);
+
   return {
     calculateScore,
     isCalculating,

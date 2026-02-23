@@ -14,10 +14,11 @@
 import type { ScoringResult, MetricScoreResult } from './types';
 import { getBasketballBenchmarks } from './basketballBenchmarks';
 import {
-  scoreWithIdealWindow,
+  scoreWithPreference,
   calculateWeightedScore,
   adjustWeightsForMissingMetrics,
   calculateScoringConfidence,
+  applyGradeCurve,
   clampScore,
 } from './scoringUtils';
 
@@ -33,25 +34,25 @@ export function calculateBasketballScore(
   action: string = 'jump_shot'
 ): ScoringResult {
   const startTime = performance.now();
-  
+
   // Get benchmarks for this action
   const benchmarks = getBasketballBenchmarks(action);
-  
+
   // Handle unsupported action
   if (!benchmarks) {
     console.warn(`[BasketballScoring] No benchmarks for action: ${action}`);
     return createEmptyResult(`Unsupported action: ${action}`);
   }
-  
+
   // Initialize result tracking
   const details: Record<string, MetricScoreResult> = {};
   const breakdown: Record<string, number> = {};
   const availableMetrics = new Set<string>();
-  
+
   // Score each metric
   for (const [metricKey, benchmark] of Object.entries(benchmarks.metrics)) {
     const rawValue = metrics[metricKey];
-    
+
     // Handle null/missing metric
     if (rawValue === null || rawValue === undefined || !Number.isFinite(rawValue)) {
       details[metricKey] = {
@@ -62,10 +63,10 @@ export function calculateBasketballScore(
       };
       continue;
     }
-    
-    // Calculate score for this metric
-    const normalizedScore = scoreWithIdealWindow(rawValue, benchmark);
-    
+
+    // Calculate score for this metric (preference-aware for directional metrics)
+    const normalizedScore = scoreWithPreference(rawValue, benchmark);
+
     // Check for NaN (shouldn't happen with proper defensive coding, but verify)
     if (!Number.isFinite(normalizedScore)) {
       details[metricKey] = {
@@ -76,22 +77,22 @@ export function calculateBasketballScore(
       };
       continue;
     }
-    
+
     // Valid score
     details[metricKey] = {
       rawValue,
       normalizedScore,
       included: true,
     };
-    
+
     breakdown[metricKey] = Math.round(normalizedScore);
     availableMetrics.add(metricKey);
   }
-  
+
   // Check minimum metrics requirement
   const metricsIncluded = availableMetrics.size;
   const metricsTotal = Object.keys(benchmarks.metrics).length;
-  
+
   if (metricsIncluded < benchmarks.minRequiredMetrics) {
     console.warn(
       `[BasketballScoring] Insufficient metrics: ${metricsIncluded}/${benchmarks.minRequiredMetrics} required`
@@ -106,31 +107,35 @@ export function calculateBasketballScore(
       calculatedAt: Date.now(),
     };
   }
-  
+
   // Adjust weights for missing metrics
   const adjustedWeights = adjustWeightsForMissingMetrics(
     availableMetrics,
     benchmarks.weights
   );
-  
+
   // Calculate weighted overall score
   const overallScore = calculateWeightedScore(breakdown, adjustedWeights);
-  
+
   // Calculate confidence
   const confidence = calculateScoringConfidence(
     metricsIncluded,
     metricsTotal,
     benchmarks.minRequiredMetrics
   );
-  
+
   const endTime = performance.now();
   console.log(
     `[BasketballScoring] Calculated score in ${(endTime - startTime).toFixed(2)}ms:`,
     { overallScore, metricsIncluded, confidence }
   );
-  
+
+  // Apply a light grade curve (0.15) — just enough to smooth harsh edges
+  // without inflating scores unrealistically
+  const curvedScore = applyGradeCurve(overallScore, 0.15);
+
   return {
-    overallScore: clampScore(overallScore),
+    overallScore: clampScore(curvedScore),
     breakdown,
     details,
     metricsIncluded,
@@ -145,7 +150,7 @@ export function calculateBasketballScore(
  */
 function createEmptyResult(reason: string): ScoringResult {
   console.error(`[BasketballScoring] ${reason}`);
-  
+
   return {
     overallScore: 0,
     breakdown: {},

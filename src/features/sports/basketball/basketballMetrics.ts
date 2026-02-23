@@ -36,12 +36,12 @@ const MIN_LANDMARK_CONFIDENCE = 0.5;
  * Maximum allowed horizontal displacement (as fraction of body width)
  * for stability calculation normalization
  */
-const MAX_STABILITY_DISPLACEMENT = 0.3;
+const MAX_STABILITY_DISPLACEMENT = 0.8;
 
 /**
  * Number of frames to analyze after release for follow-through
  */
-const FOLLOW_THROUGH_FRAMES = 5;
+const FOLLOW_THROUGH_FRAMES = 15;
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -59,14 +59,14 @@ function getLandmark(
   index: LandmarkIndex
 ): NormalizedLandmark | null {
   if (!frame || !Array.isArray(frame)) return null;
-  
+
   const landmark = frame[index];
   if (!landmark) return null;
-  
+
   // Check visibility/confidence if available
   const visibility = landmark.visibility ?? 1;
   if (visibility < MIN_LANDMARK_CONFIDENCE) return null;
-  
+
   // Validate coordinates are within normalized range
   if (
     typeof landmark.x !== 'number' ||
@@ -76,7 +76,7 @@ function getLandmark(
   ) {
     return null;
   }
-  
+
   return landmark;
 }
 
@@ -90,11 +90,11 @@ function getLandmark(
 function detectShootingHand(frame: NormalizedLandmark[]): 'left' | 'right' {
   const leftWrist = getLandmark(frame, LandmarkIndex.LEFT_WRIST);
   const rightWrist = getLandmark(frame, LandmarkIndex.RIGHT_WRIST);
-  
+
   if (!leftWrist && !rightWrist) return 'right'; // Default to right
   if (!leftWrist) return 'right';
   if (!rightWrist) return 'left';
-  
+
   // In image coordinates, lower Y = higher position
   return leftWrist.y < rightWrist.y ? 'left' : 'right';
 }
@@ -145,27 +145,29 @@ function calculateReleaseAngle(
   elbow: NormalizedLandmark | null
 ): number | null {
   if (!wrist || !elbow) return null;
-  
+
   // Vector from elbow to wrist (shooting direction)
   const dx = wrist.x - elbow.x;
   const dy = wrist.y - elbow.y;
-  
+
   // In normalized image coordinates:
   // - X increases left to right
   // - Y increases top to bottom
   // We negate dy because "up" in real world is negative Y in image coords
+  // Use abs(dx) so left-handed / mirrored shots give same angle
   const angleRad = Math.atan2(-dy, Math.abs(dx));
   let angleDeg = angleRad * (180 / Math.PI);
-  
-  // Normalize to 0-90 range (we only care about elevation angle)
+
+  // atan2 with non-negative second arg returns [-90, +90].
+  // After abs, range is [0, 90]. 90 means perfectly vertical (frontal camera) — valid.
   angleDeg = Math.abs(angleDeg);
-  
-  // Sanity check: release angles outside 0-90 are physically impossible
-  if (angleDeg < 0 || angleDeg > 90 || isNaN(angleDeg)) {
-    return null;
-  }
-  
-  return Math.round(angleDeg * 10) / 10; // Round to 1 decimal
+
+  if (isNaN(angleDeg)) return null;
+
+  // Clamp to valid physical range [0, 90]
+  angleDeg = Math.max(0, Math.min(90, angleDeg));
+
+  return Math.round(angleDeg * 10) / 10;
 }
 
 /**
@@ -185,13 +187,13 @@ function calculateElbowAngleAtRelease(
   const shoulder = getLandmark(frame, landmarks.shoulder);
   const elbow = getLandmark(frame, landmarks.elbow);
   const wrist = getLandmark(frame, landmarks.wrist);
-  
+
   if (!shoulder || !elbow || !wrist) return null;
-  
+
   const result = calculateElbowAngle(shoulder, elbow, wrist);
-  
+
   if (!result.isValid || isNaN(result.degrees)) return null;
-  
+
   return Math.round(result.degrees * 10) / 10;
 }
 
@@ -212,13 +214,13 @@ function calculateKneeAngleAtPeak(
   const hip = getLandmark(frame, landmarks.hip);
   const knee = getLandmark(frame, landmarks.knee);
   const ankle = getLandmark(frame, landmarks.ankle);
-  
+
   if (!hip || !knee || !ankle) return null;
-  
+
   const result = calculateKneeAngle(hip, knee, ankle);
-  
+
   if (!result.isValid || isNaN(result.degrees)) return null;
-  
+
   return Math.round(result.degrees * 10) / 10;
 }
 
@@ -250,49 +252,49 @@ function calculateStabilityIndex(
   if (startFrame === null || releaseFrame === null) return null;
   if (startFrame < 0 || releaseFrame >= frames.length) return null;
   if (startFrame >= releaseFrame) return null;
-  
+
   const startFrameData = frames[startFrame];
   const releaseFrameData = frames[releaseFrame];
-  
+
   if (!startFrameData || !releaseFrameData) return null;
-  
+
   // Get hip landmarks for center of mass approximation
   const startLeftHip = getLandmark(startFrameData, LandmarkIndex.LEFT_HIP);
   const startRightHip = getLandmark(startFrameData, LandmarkIndex.RIGHT_HIP);
   const releaseLeftHip = getLandmark(releaseFrameData, LandmarkIndex.LEFT_HIP);
   const releaseRightHip = getLandmark(releaseFrameData, LandmarkIndex.RIGHT_HIP);
-  
+
   if (!startLeftHip || !startRightHip || !releaseLeftHip || !releaseRightHip) {
     return null;
   }
-  
+
   // Calculate hip center at each frame
   const startHipCenterX = (startLeftHip.x + startRightHip.x) / 2;
   const releaseHipCenterX = (releaseLeftHip.x + releaseRightHip.x) / 2;
-  
+
   // Calculate body width for normalization
   const startShoulderL = getLandmark(startFrameData, LandmarkIndex.LEFT_SHOULDER);
   const startShoulderR = getLandmark(startFrameData, LandmarkIndex.RIGHT_SHOULDER);
-  
+
   let bodyWidth = 0.2; // Default fallback (20% of frame width)
   if (startShoulderL && startShoulderR) {
     bodyWidth = Math.abs(startShoulderR.x - startShoulderL.x);
     bodyWidth = Math.max(bodyWidth, 0.05); // Minimum to avoid division issues
   }
-  
+
   // Calculate horizontal displacement
   const displacement = Math.abs(releaseHipCenterX - startHipCenterX);
-  
+
   // Normalize displacement relative to body width
   const normalizedDisplacement = displacement / bodyWidth;
-  
+
   // Convert to stability score (0-100)
   // 0 displacement = 100 stability
   // MAX_STABILITY_DISPLACEMENT or more = 0 stability
   const stabilityRaw = 1 - (normalizedDisplacement / MAX_STABILITY_DISPLACEMENT);
   const stabilityClamped = Math.max(0, Math.min(1, stabilityRaw));
   const stabilityScore = Math.round(stabilityClamped * 100);
-  
+
   return stabilityScore;
 }
 
@@ -311,7 +313,7 @@ function calculateJumpHeightNormalized(
 ): number | null {
   if (!keyframes.peakJump || !keyframes.start) return null;
   if (frames.length === 0 || fps <= 0) return null;
-  
+
   try {
     // Convert NormalizedLandmark[][] to PoseFrame[] shape for analyzeJump
     const poseFrames = frames.map((landmarks, i) => ({
@@ -325,11 +327,11 @@ function calculateJumpHeightNormalized(
       start: keyframes.start,
       end: keyframes.end,
     });
-    
+
     if (!jumpAnalysis.isValid || isNaN(jumpAnalysis.heightNormalized)) {
       return null;
     }
-    
+
     // Round to 3 decimal places
     return Math.round(jumpAnalysis.heightNormalized * 1000) / 1000;
   } catch {
@@ -353,36 +355,31 @@ function calculateFollowThroughScore(
   landmarks: ReturnType<typeof getShootingSideLandmarks>
 ): number | null {
   if (releaseFrame === null) return null;
-  
+
   const endFrame = Math.min(releaseFrame + FOLLOW_THROUGH_FRAMES, frames.length - 1);
   if (endFrame <= releaseFrame) return null;
-  
-  const releaseAngle = calculateElbowAngleAtRelease(frames[releaseFrame], landmarks);
-  if (releaseAngle === null) return null;
-  
-  // Check if elbow continues extending after release
-  let maxAngleAfterRelease = releaseAngle;
-  
-  for (let i = releaseFrame + 1; i <= endFrame; i++) {
+
+  // Find the maximum elbow extension achieved in the follow-through window.
+  // Scoring on the PEAK angle (not delta) avoids penalizing professionals who
+  // are already near-fully extended at release — their delta is near zero but
+  // their absolute extension is excellent.
+  let maxAngle = 0;
+  for (let i = releaseFrame; i <= endFrame; i++) {
     const angle = calculateElbowAngleAtRelease(frames[i], landmarks);
-    if (angle !== null && angle > maxAngleAfterRelease) {
-      maxAngleAfterRelease = angle;
+    if (angle !== null && angle > maxAngle) {
+      maxAngle = angle;
     }
   }
-  
-  // Extension after release indicates good follow-through
-  const extensionDelta = maxAngleAfterRelease - releaseAngle;
-  
-  // Score based on extension (0-15 degrees extension = 0-100 score)
-  const scoreRaw = (extensionDelta / 15) * 100;
-  const scoreClamped = Math.max(0, Math.min(100, scoreRaw));
-  
-  // Also penalize if release angle was too low
-  const releaseQuality = releaseAngle >= 150 ? 1 : releaseAngle / 150;
-  
-  const finalScore = Math.round(scoreClamped * releaseQuality);
-  
-  return finalScore;
+
+  if (maxAngle === 0) return null;
+
+  // 120° = score 0 (arm still very bent — poor follow-through)
+  // 170°+ = score 100 (near-full extension — excellent follow-through)
+  const MIN_ANGLE = 120;
+  const MAX_ANGLE = 170;
+  const scoreRaw = ((maxAngle - MIN_ANGLE) / (MAX_ANGLE - MIN_ANGLE)) * 100;
+
+  return Math.round(Math.max(0, Math.min(100, scoreRaw)));
 }
 
 /**
@@ -398,10 +395,10 @@ function calculateReleaseTimingMs(
 ): number | null {
   if (keyframes.release === null || keyframes.peakJump === null) return null;
   if (fps <= 0) return null;
-  
+
   const framesDiff = keyframes.release - keyframes.peakJump;
   const timingMs = (framesDiff / fps) * 1000;
-  
+
   return Math.round(timingMs);
 }
 
@@ -421,7 +418,7 @@ function calculateJumpShotMetrics(
   input: MetricCalculationInput
 ): MetricResult {
   const { smoothedFrames, keyframes, fps } = input;
-  
+
   // Initialize all metrics as null (defensive default)
   const metrics: MetricResult = {
     releaseAngle: null,
@@ -432,39 +429,39 @@ function calculateJumpShotMetrics(
     followThroughScore: null,
     releaseTimingMs: null,
   };
-  
+
   // Validate input data
   if (!smoothedFrames || smoothedFrames.length === 0) {
     console.warn('[BasketballMetrics] No frames provided');
     return metrics;
   }
-  
+
   if (fps <= 0 || isNaN(fps)) {
     console.warn('[BasketballMetrics] Invalid FPS:', fps);
     return metrics;
   }
-  
+
   // Get release frame for shooting hand detection and calculations
   const releaseFrameIndex = keyframes.release;
   const peakFrameIndex = keyframes.peakJump;
-  
+
   // Detect shooting hand from release frame
   let shootingHand: 'left' | 'right' = 'right';
   if (releaseFrameIndex !== null && smoothedFrames[releaseFrameIndex]) {
     shootingHand = detectShootingHand(smoothedFrames[releaseFrameIndex]);
   }
-  
+
   const landmarks = getShootingSideLandmarks(shootingHand);
-  
+
   // Calculate release angle
   if (releaseFrameIndex !== null && smoothedFrames[releaseFrameIndex]) {
     const releaseFrame = smoothedFrames[releaseFrameIndex];
     const wrist = getLandmark(releaseFrame, landmarks.wrist);
     const elbow = getLandmark(releaseFrame, landmarks.elbow);
-    
+
     metrics.releaseAngle = calculateReleaseAngle(wrist, elbow);
   }
-  
+
   // Calculate elbow angle at release
   if (releaseFrameIndex !== null && smoothedFrames[releaseFrameIndex]) {
     metrics.elbowAngleAtRelease = calculateElbowAngleAtRelease(
@@ -472,7 +469,7 @@ function calculateJumpShotMetrics(
       landmarks
     );
   }
-  
+
   // Calculate knee angle at peak
   if (peakFrameIndex !== null && smoothedFrames[peakFrameIndex]) {
     metrics.kneeAngleAtPeak = calculateKneeAngleAtPeak(
@@ -480,21 +477,21 @@ function calculateJumpShotMetrics(
       landmarks
     );
   }
-  
+
   // Calculate jump height
   metrics.jumpHeightNormalized = calculateJumpHeightNormalized(
     smoothedFrames,
     fps,
     keyframes
   );
-  
+
   // Calculate stability index
   metrics.stabilityIndex = calculateStabilityIndex(
     smoothedFrames,
     keyframes.start,
     releaseFrameIndex
   );
-  
+
   // Calculate follow-through score
   if (releaseFrameIndex !== null) {
     metrics.followThroughScore = calculateFollowThroughScore(
@@ -503,12 +500,12 @@ function calculateJumpShotMetrics(
       landmarks
     );
   }
-  
+
   // Calculate release timing
   metrics.releaseTimingMs = calculateReleaseTimingMs(keyframes, fps);
-  
+
   console.log('[BasketballMetrics] Jump shot metrics calculated:', metrics);
-  
+
   return metrics;
 }
 
@@ -568,24 +565,24 @@ export function calculateBasketballMetrics(
   input: MetricCalculationInput
 ): MetricResult {
   const { action } = input;
-  
+
   console.log(`[BasketballMetrics] Calculating metrics for action: ${action}`);
-  
+
   switch (action) {
     case 'jump_shot':
       return calculateJumpShotMetrics(input);
-    
+
     case 'free_throw':
       return calculateFreeThrowMetrics(input);
-    
+
     case 'layup':
       return calculateLayupMetrics(input);
-    
+
     case 'dribbling':
       // Dribbling analysis requires different approach (temporal patterns)
       console.log('[BasketballMetrics] Dribbling analysis not yet implemented');
       return {};
-    
+
     default:
       console.warn(`[BasketballMetrics] Unknown action: ${action}`);
       return {};

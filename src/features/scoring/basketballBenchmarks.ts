@@ -32,12 +32,17 @@ import type { SportBenchmarks, MetricBenchmark } from './types';
  * - 42°: Minimum for reasonable arc, any lower is "flat"
  * - 60°: Maximum practical angle, higher requires excessive force
  */
+// Release angle: ideal range for a good jump shot.
+// 2D frontal-camera projection typically reads higher (75-90°) because
+// the wrist moves mostly vertically on screen. preference:'higher' gives
+// only a mild penalty for readings above the ideal window, so frontal-cam
+// videos still score fairly instead of zeroing out.
 const releaseAngleBenchmark: MetricBenchmark = {
-  idealMin: 50,
-  idealMax: 55,
-  acceptableMin: 42,
-  acceptableMax: 60,
-  preference: 'center', // Both too high and too low are problematic
+  idealMin: 42,
+  idealMax: 67,
+  acceptableMin: 0,
+  acceptableMax: 90,
+  preference: 'higher',
 };
 
 /**
@@ -55,11 +60,11 @@ const releaseAngleBenchmark: MetricBenchmark = {
  * - 175°: Above this, elbow is locked (limits follow-through)
  */
 const elbowAngleBenchmark: MetricBenchmark = {
-  idealMin: 150,
-  idealMax: 170,
-  acceptableMin: 135,
-  acceptableMax: 175,
-  preference: 'higher', // More extension is generally better
+  idealMin: 152,
+  idealMax: 174,
+  acceptableMin: 115,
+  acceptableMax: 180,
+  preference: 'higher',
 };
 
 /**
@@ -77,11 +82,11 @@ const elbowAngleBenchmark: MetricBenchmark = {
  * - 180°: Full extension (legs straight)
  */
 const kneeAngleBenchmark: MetricBenchmark = {
-  idealMin: 160,
+  idealMin: 162,
   idealMax: 180,
-  acceptableMin: 140,
+  acceptableMin: 125,
   acceptableMax: 180,
-  preference: 'higher', // More extension is better
+  preference: 'higher',
 };
 
 /**
@@ -104,11 +109,11 @@ const kneeAngleBenchmark: MetricBenchmark = {
  * - Shot form is more important than raw height
  */
 const jumpHeightBenchmark: MetricBenchmark = {
-  idealMin: 0.08,
-  idealMax: 0.15,
-  acceptableMin: 0.03,
-  acceptableMax: 0.25,
-  preference: 'higher', // Higher jumps generally better
+  idealMin: 0.05,
+  idealMax: 0.18,
+  acceptableMin: 0.005,
+  acceptableMax: 0.35,
+  preference: 'higher',
 };
 
 /**
@@ -128,11 +133,11 @@ const jumpHeightBenchmark: MetricBenchmark = {
  * Exception: Fadeaway shots intentionally lower stability
  */
 const stabilityIndexBenchmark: MetricBenchmark = {
-  idealMin: 85,
+  idealMin: 72,
   idealMax: 100,
-  acceptableMin: 65,
+  acceptableMin: 38,
   acceptableMax: 100,
-  preference: 'higher', // More stability is better
+  preference: 'higher',
 };
 
 /**
@@ -150,9 +155,9 @@ const stabilityIndexBenchmark: MetricBenchmark = {
  * - Quick-release shots may have less extension
  */
 const followThroughBenchmark: MetricBenchmark = {
-  idealMin: 80,
+  idealMin: 65,
   idealMax: 100,
-  acceptableMin: 50,
+  acceptableMin: 28,
   acceptableMax: 100,
   preference: 'higher',
 };
@@ -173,11 +178,11 @@ const followThroughBenchmark: MetricBenchmark = {
  * - +50ms: Slightly after peak (still effective)
  */
 const releaseTimingBenchmark: MetricBenchmark = {
-  idealMin: -50,
-  idealMax: 0,
-  acceptableMin: -100,
-  acceptableMax: 50,
-  preference: 'center', // Both too early and too late are penalized
+  idealMin: -120,
+  idealMax: 60,
+  acceptableMin: -350,
+  acceptableMax: 250,
+  preference: 'center',
 };
 
 /**
@@ -248,17 +253,17 @@ export function getBasketballBenchmarks(action: string): SportBenchmarks | null 
   switch (action) {
     case 'jump_shot':
       return basketballJumpShotBenchmarks;
-    
+
     case 'free_throw':
       // TODO: Implement free throw benchmarks
       // Similar to jump shot but with different jump height expectations
       return basketballJumpShotBenchmarks; // Fallback for now
-    
+
     case 'layup':
       // TODO: Implement layup benchmarks
       // Very different metrics (approach speed, body control, etc.)
       return null;
-    
+
     default:
       return null;
   }

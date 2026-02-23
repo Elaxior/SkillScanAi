@@ -14,7 +14,8 @@ import {
 } from '@/types'
 import type { PoseFrame, PoseDetectionResult } from '@/features/pose'
 import type { Keyframes, ProcessedFrameData } from '@/features/processing'
-import { Metrics, Flaw } from '@/types'
+import { Metrics } from '@/types'
+import type { DetectedFlaw } from '@/features/flaws'
 
 // ==========================================
 // KEYFRAMES TYPE
@@ -31,10 +32,25 @@ export interface SessionKeyframes {
 // STORE STATE TYPE
 // ==========================================
 
-interface SessionState extends Omit<Session, 'landmarks'> {
+interface SessionState extends Omit<Session, 'landmarks' | 'flaws'> {
   // Scoring
   scoreBreakdown: Record<string, number>
   scoreConfidence: number
+
+  /**
+   * Detected technique flaws
+   *
+   * Why DetectedFlaw[] instead of Flaw[]?
+   * - Contains injuryRisk, bodyPart, category and other flaw-specific fields
+   * - Multiple components need access (list, overlay, summary)
+   * - Empty array default avoids null checks in consumers
+   */
+  flaws: DetectedFlaw[]
+
+  /**
+   * Overall injury risk level derived from current flaws
+   */
+  injuryRiskLevel: 'none' | 'low' | 'moderate' | 'high'
 
   // Pose data
   landmarks: PoseFrame[]
@@ -89,7 +105,18 @@ interface SessionActions {
   // Analysis results
   setMetrics: (metrics: Metrics) => void
   setScore: (score: number) => void
-  setFlaws: (flaws: Flaw[]) => void
+  /**
+   * Set detected flaws. Deduplicates by id and recalculates injuryRiskLevel.
+   */
+  setFlaws: (flaws: DetectedFlaw[]) => void
+  /**
+   * Manually override the injury risk level.
+   */
+  setInjuryRiskLevel: (level: SessionState['injuryRiskLevel']) => void
+  /**
+   * Clear flaws and reset injury risk level (use before a new analysis).
+   */
+  clearFlaws: () => void
   setScoreBreakdown: (breakdown: Record<string, number>) => void
   setScoreWithDetails: (score: number | null, breakdown: Record<string, number>, confidence: number) => void
   clearScoring: () => void
@@ -103,7 +130,7 @@ interface SessionActions {
     landmarks?: PoseFrame[]
     metrics: Metrics
     score: number
-    flaws: Flaw[]
+    flaws: DetectedFlaw[]
   }) => void
 }
 
@@ -150,6 +177,8 @@ const initialState: SessionState = {
   error: null,
   scoreBreakdown: {},
   scoreConfidence: 0,
+  flaws: [], // Empty array — avoids null checks in consumers
+  injuryRiskLevel: 'none' as const,
 
   // Computed
   hasVideo: false,
@@ -366,7 +395,35 @@ export const useSessionStore = create<SessionStore>()((set, get) => ({
   },
 
   setFlaws: (flaws) => {
-    set({ flaws })
+    // Deduplicate by flaw id (defensive against duplicate calls)
+    const uniqueFlaws = flaws.filter(
+      (flaw, index, self) =>
+        index === self.findIndex((f) => f.id === flaw.id)
+    )
+
+    // Derive injury risk level from current flaws
+    const injuryFlaws = uniqueFlaws.filter((f) => f.injuryRisk)
+    let injuryRiskLevel: SessionState['injuryRiskLevel'] = 'none'
+
+    if (injuryFlaws.some((f) => f.severity === 'high')) {
+      injuryRiskLevel = 'high'
+    } else if (injuryFlaws.length > 1) {
+      injuryRiskLevel = 'moderate'
+    } else if (injuryFlaws.length === 1) {
+      injuryRiskLevel = 'low'
+    }
+
+    set({ flaws: uniqueFlaws, injuryRiskLevel })
+    console.log('[SessionStore] Flaws set:', uniqueFlaws.length, 'items')
+  },
+
+  setInjuryRiskLevel: (level) => {
+    set({ injuryRiskLevel: level })
+  },
+
+  clearFlaws: () => {
+    set({ flaws: [], injuryRiskLevel: 'none' })
+    console.log('[SessionStore] Flaws cleared')
   },
 
   setScoreBreakdown: (breakdown) => {
@@ -475,6 +532,15 @@ export const useSessionResults = () =>
     score: state.score,
     flaws: state.flaws,
     isComplete: state.isComplete,
+  }))
+
+export const useSessionFlaws = () =>
+  useSessionStore((state) => ({
+    flaws: state.flaws,
+    injuryRiskLevel: state.injuryRiskLevel,
+    setFlaws: state.setFlaws,
+    setInjuryRiskLevel: state.setInjuryRiskLevel,
+    clearFlaws: state.clearFlaws,
   }))
 
 export default useSessionStore

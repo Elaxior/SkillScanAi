@@ -677,10 +677,10 @@ export default function AnalysisView() {
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
-                  <StatCard label="Frames" value={displayResult.totalFrames} icon="ðŸ“¹" />
-                  <StatCard label="Poses" value={displayResult.framesWithPose} icon="ðŸƒ" />
-                  <StatCard label="Rate" value={`${(displayResult.detectionRate * 100).toFixed(0)}%`} icon="ðŸŽ¯" />
-                  <StatCard label="FPS" value={storedFps?.toFixed(1) || '...'} icon="â±ï¸" />
+                  <StatCard label="Frames" value={displayResult.totalFrames} icon="🎬" />
+                  <StatCard label="Poses" value={displayResult.framesWithPose} icon="🏃" />
+                  <StatCard label="Rate" value={`${(displayResult.detectionRate * 100).toFixed(0)}%`} icon="🎯" />
+                  <StatCard label="FPS" value={storedFps?.toFixed(1) || '...'} icon="⏱️" />
                 </div>
               </div>
             )}
@@ -733,7 +733,7 @@ export default function AnalysisView() {
                 {storedKeyframes.peakJump !== null && storedKeyframes.release !== null && (
                   <div className="pt-2 border-t border-surface-border">
                     <div className="flex justify-between items-center">
-                      <span className="text-text-tertiary">Peakâ†’Release Gap:</span>
+                      <span className="text-text-tertiary">Peak→Release Gap:</span>
                       <span className="text-text-secondary">
                         {Math.abs(storedKeyframes.release - storedKeyframes.peakJump)} frames
                       </span>
@@ -840,21 +840,6 @@ export default function AnalysisView() {
               </div>
             </Card>
           )}
-
-          {/* Coming Next */}
-          {isComplete && (
-            <Card variant="glass" padding="md">
-              <h4 className="text-sm font-semibold text-text-primary mb-2">
-                ðŸš€ Coming in Part 9
-              </h4>
-              <ul className="text-sm text-text-secondary space-y-1">
-                <li>â€¢ Joint angle calculations</li>
-                <li>â€¢ Form scoring algorithm</li>
-                <li>â€¢ Technique flaw detection</li>
-                <li>â€¢ Pro comparison metrics</li>
-              </ul>
-            </Card>
-          )}
         </div>
       </div>
 
@@ -873,7 +858,7 @@ export default function AnalysisView() {
       {/* Debug Panel */}
       {process.env.NODE_ENV === 'development' && (
         <Card variant="default" padding="md" className="mt-8">
-          <h4 className="text-xs font-semibold text-text-tertiary mb-2">ðŸ”§ Debug Info</h4>
+          <h4 className="text-xs font-semibold text-text-tertiary mb-2">🔧 Debug Info</h4>
           <pre className="text-xs text-text-tertiary overflow-auto max-h-48">
             {JSON.stringify({
               processingStatus,
