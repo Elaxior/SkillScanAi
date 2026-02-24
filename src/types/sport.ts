@@ -17,8 +17,6 @@ export enum Sport {
   BASKETBALL = 'basketball',
   BADMINTON = 'badminton',
   VOLLEYBALL = 'volleyball',
-  CRICKET = 'cricket',
-  TABLE_TENNIS = 'table_tennis',
 }
 
 // ==========================================
@@ -169,82 +167,6 @@ export const SPORTS_CONFIG: Record<Sport, SportInfo> = {
         description: 'Analyze hand position and release',
         keyPoints: ['wrist', 'elbow', 'shoulder'],
         durationRange: [1, 2],
-      },
-    ],
-  },
-
-  [Sport.CRICKET]: {
-    id: Sport.CRICKET,
-    name: 'Cricket',
-    icon: '🏏',
-    description: 'Analyze batting, bowling, and fielding',
-    color: '#3b82f6', // Blue
-    actions: [
-      {
-        id: 'batting_drive',
-        name: 'Cover Drive',
-        description: 'Analyze stance, backlift, and follow-through',
-        keyPoints: ['wrist', 'elbow', 'shoulder', 'hip', 'knee', 'ankle'],
-        durationRange: [1, 3],
-      },
-      {
-        id: 'bowling',
-        name: 'Bowling Action',
-        description: 'Analyze run-up, delivery stride, and release',
-        keyPoints: ['wrist', 'elbow', 'shoulder', 'hip', 'knee', 'ankle'],
-        durationRange: [3, 6],
-      },
-      {
-        id: 'pull_shot',
-        name: 'Pull Shot',
-        description: 'Analyze footwork and shot execution',
-        keyPoints: ['wrist', 'elbow', 'shoulder', 'hip', 'knee'],
-        durationRange: [1, 2],
-      },
-      {
-        id: 'defense',
-        name: 'Defensive Shot',
-        description: 'Analyze defensive technique',
-        keyPoints: ['wrist', 'elbow', 'shoulder', 'hip', 'knee'],
-        durationRange: [1, 2],
-      },
-    ],
-  },
-
-  [Sport.TABLE_TENNIS]: {
-    id: Sport.TABLE_TENNIS,
-    name: 'Table Tennis',
-    icon: '🏓',
-    description: 'Analyze strokes, serves, and footwork',
-    color: '#ef4444', // Red
-    actions: [
-      {
-        id: 'forehand_drive',
-        name: 'Forehand Drive',
-        description: 'Analyze stroke technique and timing',
-        keyPoints: ['wrist', 'elbow', 'shoulder', 'hip'],
-        durationRange: [0.5, 2],
-      },
-      {
-        id: 'backhand_drive',
-        name: 'Backhand Drive',
-        description: 'Analyze backhand stroke mechanics',
-        keyPoints: ['wrist', 'elbow', 'shoulder', 'hip'],
-        durationRange: [0.5, 2],
-      },
-      {
-        id: 'serve',
-        name: 'Serve',
-        description: 'Analyze toss, spin, and placement',
-        keyPoints: ['wrist', 'elbow', 'shoulder'],
-        durationRange: [1, 3],
-      },
-      {
-        id: 'smash',
-        name: 'Smash',
-        description: 'Analyze power and timing',
-        keyPoints: ['wrist', 'elbow', 'shoulder', 'hip'],
-        durationRange: [0.5, 2],
       },
     ],
   },

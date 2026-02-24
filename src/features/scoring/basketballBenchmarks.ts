@@ -247,23 +247,165 @@ export const basketballJumpShotBenchmarks: SportBenchmarks = {
 };
 
 /**
+ * Free Throw Benchmarks
+ *
+ * Same form cues as jump shot but:
+ * - No jump-height requirement (set shot is legal)
+ * - Rhythm/consistency carries more weight
+ * - Stability is more important (no defender pressure)
+ */
+const freeThrowBenchmarks: SportBenchmarks = {
+  metrics: {
+    releaseAngle: releaseAngleBenchmark,
+    elbowAngleAtRelease: elbowAngleBenchmark,
+    kneeAnglePush: {
+      idealMin: 150,
+      idealMax: 180,
+      acceptableMin: 110,
+      acceptableMax: 180,
+      preference: 'higher',
+    },
+    stabilityIndex: {
+      idealMin: 88,
+      idealMax: 100,
+      acceptableMin: 65,
+      acceptableMax: 100,
+      preference: 'higher',
+    },
+    followThroughScore: followThroughBenchmark,
+    rhythmConsistency: {
+      idealMin: 72,
+      idealMax: 100,
+      acceptableMin: 40,
+      acceptableMax: 100,
+      preference: 'higher',
+    },
+  },
+  weights: {
+    releaseAngle: 0.28,
+    elbowAngleAtRelease: 0.20,
+    stabilityIndex: 0.22,
+    followThroughScore: 0.15,
+    kneeAnglePush: 0.08,
+    rhythmConsistency: 0.07,
+  },
+  minRequiredMetrics: 2,
+};
+
+/**
+ * Layup Benchmarks
+ */
+const layupBenchmarks: SportBenchmarks = {
+  metrics: {
+    approachSpeed: {
+      idealMin: 55,
+      idealMax: 100,
+      acceptableMin: 20,
+      acceptableMax: 100,
+      preference: 'higher',
+    },
+    takeoffAngle: {
+      idealMin: 55,
+      idealMax: 80,
+      acceptableMin: 35,
+      acceptableMax: 88,
+      preference: 'center',
+    },
+    peakHeight: {
+      idealMin: 0.05,
+      idealMax: 0.18,
+      acceptableMin: 0.01,
+      acceptableMax: 0.30,
+      preference: 'higher',
+    },
+    stabilityIndex: {
+      idealMin: 68,
+      idealMax: 100,
+      acceptableMin: 35,
+      acceptableMax: 100,
+      preference: 'higher',
+    },
+    finishHandPosition: {
+      idealMin: 78,
+      idealMax: 110,
+      acceptableMin: 55,
+      acceptableMax: 125,
+      preference: 'higher',
+    },
+  },
+  weights: {
+    approachSpeed: 0.20,
+    takeoffAngle: 0.22,
+    peakHeight: 0.15,
+    stabilityIndex: 0.22,
+    finishHandPosition: 0.21,
+  },
+  minRequiredMetrics: 2,
+};
+
+/**
+ * Dribbling Stance Benchmarks
+ *
+ * Evaluates the quality of ball-handling posture and body control.
+ * Lower knee angle = deeper stance = better ball protection and agility.
+ */
+const dribblingBenchmarks: SportBenchmarks = {
+  metrics: {
+    kneeBendScore: {
+      // 0-100 score derived from hip drop ratio (how low hips are vs body height)
+      // Higher = deeper stance = better ball control and protection
+      idealMin: 50,
+      idealMax: 100,
+      acceptableMin: 25,
+      acceptableMax: 100,
+      preference: 'higher',
+    },
+    stanceWidth: {
+      // Ankle separation as % of shoulder width.
+      // Dribbling allows much wider stance than shooting — especially in drills.
+      idealMin: 70,
+      idealMax: 180,
+      acceptableMin: 45,
+      acceptableMax: 230,
+      preference: 'center',
+    },
+    balanceScore: {
+      idealMin: 55,
+      idealMax: 100,
+      acceptableMin: 30,
+      acceptableMax: 100,
+      preference: 'higher',
+    },
+    trunkLean: {
+      idealMin: 5,
+      idealMax: 25,
+      acceptableMin: 0,
+      acceptableMax: 40,
+      preference: 'center',
+    },
+  },
+  weights: {
+    kneeBendScore: 0.35,
+    balanceScore: 0.30,
+    stanceWidth: 0.20,
+    trunkLean: 0.15,
+  },
+  minRequiredMetrics: 1,
+};
+
+/**
  * Get benchmarks for a specific basketball action
  */
 export function getBasketballBenchmarks(action: string): SportBenchmarks | null {
   switch (action) {
     case 'jump_shot':
       return basketballJumpShotBenchmarks;
-
     case 'free_throw':
-      // TODO: Implement free throw benchmarks
-      // Similar to jump shot but with different jump height expectations
-      return basketballJumpShotBenchmarks; // Fallback for now
-
+      return freeThrowBenchmarks;
     case 'layup':
-      // TODO: Implement layup benchmarks
-      // Very different metrics (approach speed, body control, etc.)
-      return null;
-
+      return layupBenchmarks;
+    case 'dribbling':
+      return dribblingBenchmarks;
     default:
       return null;
   }

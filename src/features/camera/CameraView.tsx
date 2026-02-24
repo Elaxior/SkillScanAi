@@ -74,6 +74,10 @@ export default function CameraView() {
   // Local state
   const [showPlayback, setShowPlayback] = useState(false)
 
+  // Always-current ref for recordedUrl — avoids stale-closure bugs in handleContinueToAnalysis
+  // (updated synchronously every render so the callback never sees a stale value)
+  const latestRecordedUrlRef = useRef<string | null>(null)
+
   // ==========================================
   // CAMERA HOOK
   // ==========================================
@@ -120,6 +124,10 @@ export default function CameraView() {
       console.log('[CameraView] Max duration reached')
     },
   })
+
+  // Keep ref in sync with latest recordedUrl on every render so handleContinueToAnalysis
+  // always reads the current value even if its useCallback closure is stale
+  latestRecordedUrlRef.current = recordedUrl ?? latestRecordedUrlRef.current
 
   // ==========================================
   // STORES
@@ -173,36 +181,45 @@ export default function CameraView() {
   }, [resetRecording])
 
   const handleContinueToAnalysis = useCallback(() => {
-    console.log('[CameraView] Continuing to analysis')
+    // Read from ref so we always get the current URL even if the closure is stale
+    const url = latestRecordedUrlRef.current
+    console.log('[CameraView] Continuing to analysis — url:', url ? 'set' : 'null', '| sport:', selectedSport, '| action:', selectedAction)
 
-    if (recordedUrl && selectedSport && selectedAction) {
-      // Start a new session in the store
-      startNewSession(selectedSport, selectedAction)
-
-      // Save video URL to session store
-      setVideo(recordedUrl, {
-        duration: duration,
-      })
-
-      // Navigate to analysis page
-      router.push('/analysis')
-    } else if (recordedUrl) {
-      // No sport/action selected, still save video
-      setVideo(recordedUrl, { duration })
-      router.push('/analysis')
+    if (!url) {
+      console.warn('[CameraView] No video URL available yet — ignoring')
+      return
     }
-  }, [recordedUrl, selectedSport, selectedAction, duration, startNewSession, setVideo, router])
+
+    if (selectedSport && selectedAction) {
+      // startNewSession resets the store (including video.url).
+      // Call setVideo AFTER so our blob URL ends up in the store, not revoked.
+      startNewSession(selectedSport, selectedAction)
+      setVideo(url, { duration })
+    } else {
+      setVideo(url, { duration })
+    }
+
+    router.push('/analysis')
+  }, [selectedSport, selectedAction, duration, startNewSession, setVideo, router])
+  // Note: latestRecordedUrlRef is intentionally NOT a dep — it's a ref, always current
 
   const handleFileUpload = useCallback((file: File) => {
     console.log('[CameraView] Processing uploaded file:', file.name)
 
-    // Validate file type
-    if (!file.type.startsWith('video/')) {
+    // Accept common video MIME types; some browsers report empty type for certain files
+    const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|mov|avi|webm|mkv|m4v)$/i)
+    if (!isVideo) {
       console.error('[CameraView] Invalid file type:', file.type)
       return
     }
 
-    // Create blob from file and set it
+    // Pre-populate the ref immediately (synchronous) so handleContinueToAnalysis
+    // can read the URL even before useRecorder's state update has been applied.
+    const immediateUrl = URL.createObjectURL(file)
+    latestRecordedUrlRef.current = immediateUrl
+    console.log('[CameraView] Blob URL created immediately:', immediateUrl.slice(0, 40))
+
+    // Also pass to recorder hook (it creates its own internal URL for the playback <video>)
     setRecordedBlob(file)
     setShowPlayback(true)
 

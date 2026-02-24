@@ -31,8 +31,6 @@ import type { MetricCalculationInput, MetricResult, SportMetricCalculator } from
 import { calculateBasketballMetrics } from './basketball';
 import { calculateVolleyballMetrics } from './volleyball';
 import { calculateBadmintonMetrics } from './badminton';
-import { calculateCricketMetrics } from './cricket';
-import { calculateTableTennisMetrics } from './tabletennis';
 
 /**
  * Registry mapping sport identifiers to their metric calculators
@@ -41,15 +39,11 @@ import { calculateTableTennisMetrics } from './tabletennis';
  * - 'basketball'
  * - 'volleyball'
  * - 'badminton'
- * - 'cricket'
- * - 'table_tennis'
  */
 export const sportMetricRegistry: Record<string, SportMetricCalculator> = {
   basketball: calculateBasketballMetrics,
   volleyball: calculateVolleyballMetrics,
   badminton: calculateBadmintonMetrics,
-  cricket: calculateCricketMetrics,
-  table_tennis: calculateTableTennisMetrics,
 };
 
 /**
@@ -60,12 +54,12 @@ export const sportMetricRegistry: Record<string, SportMetricCalculator> = {
  */
 export function getMetricCalculator(sport: string): SportMetricCalculator | null {
   const calculator = sportMetricRegistry[sport];
-  
+
   if (!calculator) {
     console.warn(`[SportRegistry] No calculator found for sport: ${sport}`);
     return null;
   }
-  
+
   return calculator;
 }
 
@@ -84,21 +78,21 @@ export function calculateSportMetrics(
   input: MetricCalculationInput
 ): MetricResult {
   const calculator = getMetricCalculator(sport);
-  
+
   if (!calculator) {
     console.error(`[SportRegistry] Cannot calculate metrics - unsupported sport: ${sport}`);
     return {};
   }
-  
+
   try {
     const startTime = performance.now();
     const metrics = calculator(input);
     const endTime = performance.now();
-    
+
     console.log(
       `[SportRegistry] Calculated ${sport} metrics in ${(endTime - startTime).toFixed(2)}ms`
     );
-    
+
     return metrics;
   } catch (error) {
     console.error(`[SportRegistry] Error calculating ${sport} metrics:`, error);

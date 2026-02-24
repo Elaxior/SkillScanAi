@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import SportsView from '@/features/sports/SportsView'
 import type { Metadata } from 'next'
 
@@ -7,5 +8,9 @@ export const metadata: Metadata = {
 }
 
 export default function SportsPage() {
-  return <SportsView />
+  return (
+    <Suspense>
+      <SportsView />
+    </Suspense>
+  )
 }

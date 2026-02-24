@@ -8,4 +8,5 @@
 // Main stores
 export { useUserStore, useUserHeight, useUserSport, useUserPreferences } from './useUserStore'
 export { useSessionStore, useSessionVideo, useSessionPose, useSessionProcessing, useSessionResults } from './useSessionStore'
+export type { SessionKeyframes } from './useSessionStore'
 export { useAppStore, useAppLoading, useAppTheme, useAppModal, useAppToasts } from './useAppStore'

@@ -3,4 +3,3 @@
  */
 
 export { calculateVolleyballMetrics } from './volleyballMetrics';
-export type { VolleyballSpikeMetrics } from './volleyballMetrics';

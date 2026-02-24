@@ -2,4 +2,5 @@
  * Analysis Feature Index
  */
 
-export { default as AnalysisView } from './AnalysisView'
+export { AnalysisView } from './AnalysisView'
+export { ProcessingLayout } from './ProcessingLayout'

@@ -59,7 +59,7 @@ export function useFlawDetection(): UseFlawDetectionResult {
       return null;
     }
 
-    if (!metrics || Object.keys(metrics).length === 0) {
+    if (!metrics) {
       setError('No metrics available for flaw detection');
       return null;
     }

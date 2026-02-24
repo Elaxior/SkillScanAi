@@ -18,66 +18,8 @@ import type {
   FlawDetectionResult,
 } from './flawTypes';
 import { detectBasketballFlaws } from './basketballFlaws';
-
-// ============================================================================
-// PLACEHOLDER FUNCTIONS FOR UNIMPLEMENTED SPORTS
-// ============================================================================
-
-/**
- * Volleyball flaw detection (placeholder)
- * TODO: Implement volleyball-specific rules
- */
-function detectVolleyballFlaws(input: FlawDetectionInput): FlawDetectionResult {
-  console.log('[VolleyballFlaws] Not yet implemented for action:', input.action);
-  return {
-    flaws: [],
-    rulesEvaluated: 0,
-    overallInjuryRisk: 'none',
-    summary: 'Volleyball flaw detection coming soon.',
-  };
-}
-
-/**
- * Badminton flaw detection (placeholder)
- * TODO: Implement badminton-specific rules
- */
-function detectBadmintonFlaws(input: FlawDetectionInput): FlawDetectionResult {
-  console.log('[BadmintonFlaws] Not yet implemented for action:', input.action);
-  return {
-    flaws: [],
-    rulesEvaluated: 0,
-    overallInjuryRisk: 'none',
-    summary: 'Badminton flaw detection coming soon.',
-  };
-}
-
-/**
- * Cricket flaw detection (placeholder)
- * TODO: Implement cricket-specific rules
- */
-function detectCricketFlaws(input: FlawDetectionInput): FlawDetectionResult {
-  console.log('[CricketFlaws] Not yet implemented for action:', input.action);
-  return {
-    flaws: [],
-    rulesEvaluated: 0,
-    overallInjuryRisk: 'none',
-    summary: 'Cricket flaw detection coming soon.',
-  };
-}
-
-/**
- * Table Tennis flaw detection (placeholder)
- * TODO: Implement table tennis-specific rules
- */
-function detectTableTennisFlaws(input: FlawDetectionInput): FlawDetectionResult {
-  console.log('[TableTennisFlaws] Not yet implemented for action:', input.action);
-  return {
-    flaws: [],
-    rulesEvaluated: 0,
-    overallInjuryRisk: 'none',
-    summary: 'Table tennis flaw detection coming soon.',
-  };
-}
+import { detectVolleyballFlaws } from './volleyballFlaws';
+import { detectBadmintonFlaws } from './badmintonFlaws';
 
 // ============================================================================
 // REGISTRY
@@ -92,8 +34,6 @@ export const flawRegistry: Record<string, FlawDetectionFunction> = {
   basketball: detectBasketballFlaws,
   volleyball: detectVolleyballFlaws,
   badminton: detectBadmintonFlaws,
-  cricket: detectCricketFlaws,
-  table_tennis: detectTableTennisFlaws,
 };
 
 /**
@@ -104,12 +44,12 @@ export const flawRegistry: Record<string, FlawDetectionFunction> = {
  */
 export function getFlawDetector(sport: string): FlawDetectionFunction | null {
   const detector = flawRegistry[sport];
-  
+
   if (!detector) {
     console.warn(`[FlawRegistry] No detector found for sport: ${sport}`);
     return null;
   }
-  
+
   return detector;
 }
 
@@ -128,7 +68,7 @@ export function detectFlaws(
   input: FlawDetectionInput
 ): FlawDetectionResult {
   const detector = getFlawDetector(sport);
-  
+
   if (!detector) {
     return {
       flaws: [],
@@ -137,16 +77,16 @@ export function detectFlaws(
       summary: `Flaw detection for ${sport} is not supported.`,
     };
   }
-  
+
   try {
     const startTime = performance.now();
     const result = detector(input);
     const endTime = performance.now();
-    
+
     console.log(
       `[FlawRegistry] Detected ${result.flaws.length} flaws in ${(endTime - startTime).toFixed(2)}ms`
     );
-    
+
     return result;
   } catch (error) {
     console.error(`[FlawRegistry] Error detecting flaws for ${sport}:`, error);

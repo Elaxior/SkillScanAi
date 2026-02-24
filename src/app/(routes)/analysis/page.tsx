@@ -1,314 +1,579 @@
 ﻿/**
- * Analysis Page - Polished Results Layout
+ * Analysis Page - Production Optimized
+ * 
+ * Final hardened version with:
+ * - Demo mode support
+ * - Error boundaries
+ * - Performance optimizations
+ * - Graceful failure handling
+ * - Processing time limits
  */
 
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import { motion, AnimatePresence } from 'framer-motion';
 import { PageContainer } from '@/components/layout';
-import { Button, Card, Loader, ScoreRing, Badge } from '@/components/ui';
+import { Button, Loader } from '@/components/ui';
+import { ErrorBoundary, AnalysisErrorFallback } from '@/components/ErrorBoundary';
+import { ProcessingComplete } from '@/components/ui/ProcessingIndicator';
 import { useSessionStore, useUserStore } from '@/store';
 import { useMetricCalculation } from '@/features/sports/hooks/useMetricCalculation';
 import { useScoringEngine } from '@/features/scoring/hooks/useScoringEngine';
 import { useFlawDetection } from '@/features/flaws/hooks/useFlawDetection';
+import { useDemoMode, DemoBanner } from '@/features/demo';
+import { ResultsDashboard } from '@/features/results';
 import { AnalysisView } from '@/features/analysis';
-import { getLetterGrade, getPerformanceLevel } from '@/features/scoring';
-import type { DetectedFlaw } from '@/features/flaws';
+import { usePoseProcessor } from '@/features/pose';
+import type { PoseProcessorConfig } from '@/features/pose';
+import type { PoseFrame, ProcessingProgress } from '@/features/pose/types';
+import { detectKeyframes } from '@/features/processing';
+import { showToast } from '@/components/ui/Toast';
+import { MAX_PROCESSING_TIME_MS, createTimer } from '@/lib/performance';
 
-function metricLabel(key: string): string {
-  const map: Record<string, string> = {
-    releaseAngle: 'Release Angle',
-    elbowAngleAtRelease: 'Elbow Angle',
-    kneeAngleAtPeak: 'Knee Angle',
-    jumpHeightNormalized: 'Jump Height',
-    stabilityIndex: 'Stability',
-    followThroughScore: 'Follow-Through',
-    releaseTimingMs: 'Release Timing',
-  };
-  return map[key] ?? key.replace(/([A-Z])/g, ' $1').trim();
-}
-
-function scoreColors(s: number) {
-  if (s >= 90) return { text: 'text-green-400', bar: 'bg-green-500' };
-  if (s >= 75) return { text: 'text-emerald-400', bar: 'bg-emerald-500' };
-  if (s >= 60) return { text: 'text-yellow-400', bar: 'bg-yellow-500' };
-  if (s >= 45) return { text: 'text-orange-400', bar: 'bg-orange-500' };
-  return { text: 'text-red-400', bar: 'bg-red-500' };
-}
-
-function severityClasses(s: DetectedFlaw['severity']) {
-  if (s === 'high') return 'bg-red-500/10 border-red-500/40 text-red-400';
-  if (s === 'medium') return 'bg-yellow-500/10 border-yellow-500/40 text-yellow-400';
-  return 'bg-blue-500/10 border-blue-500/40 text-blue-400';
-}
+// Module-level flag prevents double-invocation from React Strict Mode (dev double-mount)
+// Unlike a ref, this persists across unmount/remount cycles within the same page load
+let _analysisRunning = false;
 
 export default function AnalysisPage() {
   const router = useRouter();
+
+  // Processing state
   const [analysisComplete, setAnalysisComplete] = useState(false);
+  const [showVideo, setShowVideo] = useState(false);
+  const [processingStartTime, setProcessingStartTime] = useState<number | null>(null);
+  const [processingTimeMs, setProcessingTimeMs] = useState<number | null>(null);
+  const [processingProgress, setProcessingProgress] = useState(0);
+  const [processingStage, setProcessingStage] = useState('Initializing');
+  const [isRunning, setIsRunning] = useState(false);
+  const [loadingElapsed, setLoadingElapsed] = useState(0);
+  const [displayProgress, setDisplayProgress] = useState(0);
+  const [liveFrameCount, setLiveFrameCount] = useState(0);
+  const [liveConfidence, setLiveConfidence] = useState(0);
+  const [videoReady, setVideoReady] = useState(false);
 
-  const videoUrl = useSessionStore((s) => s.video.url);
-  const smoothedFrames = useSessionStore((s) => s.smoothedLandmarks);
-  const metrics = useSessionStore((s) => s.metrics);
-  const score = useSessionStore((s) => s.score);
-  const scoreBreakdown = useSessionStore((s) => s.scoreBreakdown);
-  const scoreConfidence = useSessionStore((s) => s.scoreConfidence);
-  const flaws = useSessionStore((s) => s.flaws);
-  const injuryRiskLevel = useSessionStore((s) => s.injuryRiskLevel);
-  const selectedSport = useUserStore((s) => s.selectedSport);
-  const selectedAction = useUserStore((s) => s.selectedAction);
+  // Refs for cleanup
+  const processingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isProcessingRef = useRef(false);
+  const hiddenVideoRef = useRef<HTMLVideoElement>(null);
 
-  const { calculateMetrics, isCalculating: calcM, error: errM } = useMetricCalculation();
-  const { calculateScore, isCalculating: calcS, error: errS } = useScoringEngine();
-  const { detectFlawsFromMetrics, isDetecting: calcF, error: errF, hasInjuryRisks } = useFlawDetection();
+  // Demo mode
+  const { demoMode, loadDemoData, isDemoSession } = useDemoMode();
 
+  // Store data
+  const videoUrl = useSessionStore((state) => state.video.url);
+  const smoothedLandmarks = useSessionStore((state) => state.smoothedLandmarks);
+  const metrics = useSessionStore((state) => state.metrics);
+  const score = useSessionStore((state) => state.score);
+  const scoreBreakdown = useSessionStore((state) => state.scoreBreakdown);
+  const scoreConfidence = useSessionStore((state) => state.scoreConfidence);
+  const flaws = useSessionStore((state) => state.flaws);
+  const selectedSport = useUserStore((state) => state.selectedSport);
+  const selectedAction = useUserStore((state) => state.selectedAction);
+
+  // Session store actions for pose data
+  const setLandmarks = useSessionStore((state) => state.setLandmarks);
+  const setSmoothedLandmarks = useSessionStore((state) => state.setSmoothedLandmarks);
+  const setPoseResult = useSessionStore((state) => state.setPoseResult);
+  const setFps = useSessionStore((state) => state.setFps);
+  const setKeyframes = useSessionStore((state) => state.setKeyframes);
+
+  // Per-frame callback — updates live stats and drives progress ring during pose detection
+  const onFrameProcessed = useCallback((frame: PoseFrame) => {
+    setLiveFrameCount((n) => n + 1);
+    setLiveConfidence(frame.confidence);
+  }, []);
+
+  const onPoseProgress = useCallback((prog: ProcessingProgress) => {
+    // Pose processor reports 0–100% for just the detection phase → map to 5–50% of pipeline
+    const mapped = 5 + Math.round((prog.percentage / 100) * 45);
+    setProcessingProgress(mapped);
+  }, []);
+
+  // Pose processor
+  const { processVideo } = usePoseProcessor({ onFrameProcessed, onProgress: onPoseProgress });
+
+  // Hooks
+  const {
+    calculateMetrics,
+    isCalculating: isCalculatingMetrics,
+    error: metricsError,
+  } = useMetricCalculation();
+
+  const {
+    calculateScore,
+    isCalculating: isCalculatingScore,
+    error: scoringError,
+  } = useScoringEngine();
+
+  const {
+    detectFlawsFromMetrics,
+    isDetecting: isDetectingFlaws,
+    error: flawError,
+  } = useFlawDetection();
+
+  // Derived state
   const hasVideo = Boolean(videoUrl);
-  const hasPoseData = smoothedFrames && smoothedFrames.length > 0;
+  const hasPoseData = smoothedLandmarks && smoothedLandmarks.length > 0;
   const hasMetrics = Object.keys(metrics).length > 0;
-  const hasScore = score !== null;
-  const isCalculating = calcM || calcS || calcF;
-  const anyError = errM || errS || errF;
+  const isCalculating = isCalculatingMetrics || isCalculatingScore || isDetectingFlaws;
+  const hasError = Boolean(metricsError || scoringError || flawError);
 
+  // Memoized values for performance
+  const frameCount = useMemo(() => smoothedLandmarks?.length ?? 0, [smoothedLandmarks]);
+
+  // Cleanup function
+  const cleanup = useCallback(() => {
+    if (processingTimeoutRef.current) {
+      clearTimeout(processingTimeoutRef.current);
+      processingTimeoutRef.current = null;
+    }
+    isProcessingRef.current = false;
+    _analysisRunning = false;
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return cleanup;
+  }, [cleanup]);
+
+  // Track elapsed time while running
+  useEffect(() => {
+    if (!isRunning || !processingStartTime) { setLoadingElapsed(0); return; }
+    const iv = setInterval(() => setLoadingElapsed((Date.now() - processingStartTime) / 1000), 100);
+    return () => clearInterval(iv);
+  }, [isRunning, processingStartTime]);
+
+  // Smoothly lerp displayProgress toward the real processingProgress every 80ms
+  useEffect(() => {
+    if (!isRunning) { setDisplayProgress(0); return; }
+    const iv = setInterval(() => {
+      setDisplayProgress((prev) => {
+        if (prev >= processingProgress) return prev;
+        // Step size: bigger gap → bigger step (feels snappier on jumps, smooth on creep)
+        const step = Math.max(0.5, (processingProgress - prev) * 0.12);
+        return Math.min(prev + step, processingProgress);
+      });
+    }, 80);
+    return () => clearInterval(iv);
+  }, [isRunning, processingProgress]);
+
+  // Run analysis pipeline
   const runAnalysis = useCallback(async () => {
-    const m = calculateMetrics();
-    if (!m) return;
-    await new Promise((r) => setTimeout(r, 60));
-    calculateScore();
-    await new Promise((r) => setTimeout(r, 60));
-    detectFlawsFromMetrics();
-    setAnalysisComplete(true);
-  }, [calculateMetrics, calculateScore, detectFlawsFromMetrics]);
+    if (isProcessingRef.current || _analysisRunning) {
+      console.log('[AnalysisPage] Already processing, skipping');
+      return;
+    }
 
+    isProcessingRef.current = true;
+    _analysisRunning = true;
+    setIsRunning(true);
+    setLiveFrameCount(0);
+    setLiveConfidence(0);
+    const timer = createTimer();
+    setProcessingStartTime(Date.now());
+    setProcessingProgress(0);
+
+    console.log('[AnalysisPage] Starting analysis pipeline...');
+
+    // Set timeout for max processing time
+    processingTimeoutRef.current = setTimeout(() => {
+      if (isProcessingRef.current) {
+        console.warn('[AnalysisPage] Processing timeout reached');
+        showToast('warning', 'Processing is taking longer than expected. Results may be partial.');
+        setAnalysisComplete(true);
+        isProcessingRef.current = false;
+      }
+    }, MAX_PROCESSING_TIME_MS);
+
+    try {
+      // Step 1: Pose detection (run if no pose data yet)
+      const currentHasPoseData = useSessionStore.getState().hasPoseData;
+      if (!currentHasPoseData) {
+        setProcessingStage('Loading Pose Model');
+        setProcessingProgress(5);
+
+        const videoEl = hiddenVideoRef.current;
+        if (!videoEl || !videoUrl) {
+          throw new Error('No video available for pose detection');
+        }
+
+        setProcessingStage('Detecting Pose');
+        const poseResult = await processVideo(videoEl);
+
+        if (poseResult === null) {
+          // Null means processing was cancelled (e.g. Strict Mode first-mount cleanup).
+          // Check if the store already has pose data from a concurrent run.
+          if (useSessionStore.getState().hasPoseData) {
+            console.log('[AnalysisPage] processVideo null but store already has pose data – continuing to metrics');
+          } else {
+            // No pose data and no result — the video element was likely destroyed
+            // before processing finished (Strict Mode first-mount). 
+            // isProcessingRef will still be true if THIS run owns the pipeline.
+            // Exit only if our own run was externally cancelled (ref cleared by cleanup).
+            if (!isProcessingRef.current) {
+              console.log('[AnalysisPage] processVideo null – cancelled by cleanup, exiting silently');
+              return;
+            }
+            throw new Error(
+              'No pose detected. Make sure your full body is visible and the video is well-lit.'
+            );
+          }
+        } else {
+          if (poseResult.frames.length === 0) {
+            throw new Error(
+              'No pose detected. Make sure your full body is visible and the video is well-lit.'
+            );
+          }
+
+          setLandmarks(poseResult.frames);
+          setSmoothedLandmarks(poseResult.frames);
+          setPoseResult(poseResult);
+
+          // Compute FPS from the processed result so metric calculation has a valid value.
+          const computedFps =
+            poseResult.videoDuration > 0
+              ? Math.round(poseResult.frames.length / poseResult.videoDuration)
+              : 30;
+          setFps(Math.max(1, computedFps));
+
+          // Detect keyframes (peak jump, release point, start/end)
+          setProcessingStage('Detecting Keyframes');
+          const kfResult = detectKeyframes(poseResult.frames, poseResult.videoDuration);
+          setKeyframes(kfResult.keyframes);
+          console.log('[AnalysisPage] Keyframes detected:', kfResult.keyframes);
+          console.log('[AnalysisPage] Pose detection done:', poseResult.framesWithPose, 'frames, fps:', computedFps);
+        }
+
+        setProcessingProgress(50);
+        await new Promise((resolve) => setTimeout(resolve, 90));
+      }
+
+      // Step 2: Calculate metrics
+      setProcessingStage('Extracting Metrics');
+      setProcessingProgress(60);
+      await new Promise((resolve) => setTimeout(resolve, 90));
+
+      const metricsResult = calculateMetrics();
+      if (!metricsResult) {
+        throw new Error('Metric calculation failed');
+      }
+
+      setProcessingProgress(75);
+      await new Promise((resolve) => setTimeout(resolve, 90));
+
+      // Step 3: Calculate score
+      setProcessingStage('Calculating Score');
+      await new Promise((resolve) => setTimeout(resolve, 90));
+
+      calculateScore();
+      setProcessingProgress(88);
+      await new Promise((resolve) => setTimeout(resolve, 90));
+
+      // Step 4: Detect flaws
+      setProcessingStage('Analyzing Form');
+      await new Promise((resolve) => setTimeout(resolve, 90));
+
+      detectFlawsFromMetrics();
+      setProcessingProgress(100);
+      // Let the ring animate all the way to 100 before revealing results
+      await new Promise((resolve) => setTimeout(resolve, 350));
+
+      // Complete
+      const timeMs = timer.elapsed();
+      setProcessingTimeMs(timeMs);
+      setAnalysisComplete(true);
+
+      timer.log('Full analysis pipeline');
+      showToast('success', `Analysis complete in ${(timeMs / 1000).toFixed(1)}s`);
+
+    } catch (error) {
+      console.error('[AnalysisPage] Analysis error:', error);
+      showToast('error', error instanceof Error ? error.message : 'Analysis failed. Please try again.');
+    } finally {
+      _analysisRunning = false;
+      setIsRunning(false);
+      cleanup();
+    }
+  }, [
+    videoUrl,
+    processVideo,
+    setLandmarks,
+    setSmoothedLandmarks,
+    setPoseResult,
+    setFps,
+    setKeyframes,
+    calculateMetrics,
+    calculateScore,
+    detectFlawsFromMetrics,
+    cleanup,
+  ]);
+
+  // Reset videoReady whenever the URL changes (new upload / new session)
   useEffect(() => {
-    if (hasPoseData && !analysisComplete && !hasMetrics) runAnalysis();
-  }, [hasPoseData, analysisComplete, hasMetrics, runAnalysis]);
+    setVideoReady(false);
+  }, [videoUrl]);
 
+  // Auto-run analysis — wait until the hidden <video> has actually loaded its data
   useEffect(() => {
-    if (!hasVideo) router.push('/camera');
-  }, [hasVideo, router]);
+    if (videoReady && !analysisComplete && !hasMetrics && !demoMode) {
+      runAnalysis();
+    }
+  }, [videoReady, analysisComplete, hasMetrics, demoMode, runAnalysis]);
 
-  if (!hasVideo) {
+  // Handle demo mode
+  useEffect(() => {
+    if (demoMode && !isDemoSession && !hasVideo) {
+      console.log('[AnalysisPage] Demo mode active, loading demo data');
+      loadDemoData();
+      setAnalysisComplete(true);
+    }
+  }, [demoMode, isDemoSession, hasVideo, loadDemoData]);
+
+  // Redirect if no video and not demo mode
+  useEffect(() => {
+    if (!hasVideo && !demoMode) {
+      router.push('/camera');
+    }
+  }, [hasVideo, demoMode, router]);
+
+  // Handle re-analysis
+  const handleReanalyze = useCallback(() => {
+    setAnalysisComplete(false);
+    setProcessingTimeMs(null);
+    runAnalysis();
+  }, [runAnalysis]);
+
+  // Handle navigation
+  const handleNewRecording = useCallback(() => {
+    cleanup();
+    router.push('/camera');
+  }, [cleanup, router]);
+
+  // Loading state
+  if (!hasVideo && !demoMode) {
     return (
       <PageContainer>
         <div className="flex items-center justify-center min-h-[60vh]">
-          <Loader size="lg" />
+          <Loader size="lg" text="Loading..." />
         </div>
       </PageContainer>
     );
   }
 
-  const grade = hasScore ? getLetterGrade(score!) : null;
-  const level = hasScore ? getPerformanceLevel(score!) : null;
-  const sorted = Object.entries(scoreBreakdown).sort(([, a], [, b]) => b - a);
-  const highF = flaws.filter((f) => f.severity === 'high');
-  const medF = flaws.filter((f) => f.severity === 'medium');
-  const lowF = flaws.filter((f) => f.severity === 'low');
-
   return (
-    <PageContainer>
-      <div className="space-y-5">
+    <PageContainer className="pb-8">
+      {/* Hidden video used for pose detection */}
+      {videoUrl && (
+        <video
+          ref={hiddenVideoRef}
+          src={videoUrl}
+          className="hidden"
+          preload="auto"
+          playsInline
+          muted
+          onLoadedData={() => setVideoReady(true)}
+        />
+      )}
 
-        {/* Header */}
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-3 flex-wrap">
-              <h1 className="text-2xl font-bold text-white">Analysis Results</h1>
-              {hasInjuryRisks && <Badge variant="danger" size="sm">⚠️ Injury Risk</Badge>}
-              {hasScore && grade && (
-                <span className={`text-sm font-semibold px-2.5 py-0.5 rounded-full border ${score! >= 75 ? 'bg-green-500/20 border-green-500/50 text-green-300'
-                    : score! >= 55 ? 'bg-yellow-500/20 border-yellow-500/50 text-yellow-300'
-                      : 'bg-red-500/20 border-red-500/50 text-red-300'
-                  }`}>
-                  {grade} - {score}/100
-                </span>
-              )}
-            </div>
-            <p className="text-gray-400 mt-1 text-sm">
-              {selectedSport && selectedAction
-                ? `${selectedSport} - ${selectedAction.replace(/_/g, ' ')}`
-                : 'Processing your performance'}
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={() => { setAnalysisComplete(false); runAnalysis(); }}
-              disabled={isCalculating || !hasPoseData}
+      {/* Demo Banner */}
+      <DemoBanner className="mb-6" onLoadDemo={() => setAnalysisComplete(true)} />
+
+      {/* Main Content */}
+      <ErrorBoundary
+        fallback={
+          <AnalysisErrorFallback
+            onRetry={handleReanalyze}
+            onNewRecording={handleNewRecording}
+          />
+        }
+      >
+        <AnimatePresence mode="wait">
+          {/* Loading state */}
+          {isRunning && (() => {
+            const R = 64;
+            const circ = 2 * Math.PI * R;
+            const offset = circ * (1 - displayProgress / 100);
+            return (
+              <motion.div
+                key="loading"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="flex flex-col items-center justify-center min-h-[70vh] gap-12"
+              >
+                {/* SVG progress ring */}
+                <div className="relative flex items-center justify-center">
+                  <svg width="168" height="168" className="-rotate-90">
+                    {/* Track */}
+                    <circle
+                      cx="84" cy="84" r={R}
+                      fill="none"
+                      stroke="rgba(255,255,255,0.06)"
+                      strokeWidth="6"
+                    />
+                    {/* Progress arc */}
+                    <motion.circle
+                      cx="84" cy="84" r={R}
+                      fill="none"
+                      stroke="#F59E0B"
+                      strokeWidth="6"
+                      strokeLinecap="round"
+                      strokeDasharray={circ}
+                      initial={{ strokeDashoffset: circ }}
+                      animate={{ strokeDashoffset: offset }}
+                      transition={{ duration: 0.3, ease: 'easeOut' }}
+                    />
+                  </svg>
+                  {/* Centre text */}
+                  <div className="absolute flex flex-col items-center">
+                    <span
+                      className="text-3xl font-black text-white tabular-nums leading-none"
+                      style={{ fontFamily: "'Barlow Condensed', monospace" }}
+                    >
+                      {Math.round(displayProgress)}%
+                    </span>
+                  </div>
+                </div>
+
+                {/* Console readout */}
+                <div className="font-mono text-sm space-y-2.5 text-left w-64">
+                  <p className="text-gray-500 text-xs tracking-widest uppercase mb-4">
+                    MediaPipe model working...
+                  </p>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">stage</span>
+                    <span className="text-white">{processingStage}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">progress</span>
+                    <span className="text-[#F59E0B]">{Math.round(displayProgress)}%</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">frames detected</span>
+                    <span className="text-white">
+                      {liveFrameCount > 0 ? liveFrameCount : (
+                        <motion.span
+                          animate={{ opacity: [1, 0.3, 1] }}
+                          transition={{ duration: 1.2, repeat: Infinity }}
+                          className="text-gray-600"
+                        >detecting...</motion.span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">model confidence</span>
+                    <span className="text-white">
+                      {liveConfidence > 0 ? `${(liveConfidence * 100).toFixed(1)}%` : (
+                        <motion.span
+                          animate={{ opacity: [1, 0.3, 1] }}
+                          transition={{ duration: 1.2, repeat: Infinity, delay: 0.4 }}
+                          className="text-gray-600"
+                        >loading...</motion.span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">elapsed</span>
+                    <span className="text-white">{loadingElapsed.toFixed(1)}s</span>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })()}
+
+          {/* Error State */}
+          {hasError && !isRunning && (
+            <motion.div
+              key="error"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
             >
-              {isCalculating ? 'Analyzing...' : 'Re-analyze'}
-            </Button>
-            <Button variant="outline" onClick={() => router.push('/camera')}>
-              New Recording
-            </Button>
-          </div>
-        </div>
+              <AnalysisErrorFallback
+                onRetry={handleReanalyze}
+                onNewRecording={handleNewRecording}
+              />
+            </motion.div>
+          )}
 
-        {/* Error */}
-        {anyError && (
-          <div className="flex items-start gap-3 p-4 rounded-xl border border-red-500/40 bg-red-500/10">
-            <span className="text-red-400 text-xl">X</span>
-            <div>
-              <p className="font-semibold text-red-400">Analysis Error</p>
-              <p className="text-sm text-gray-300 mt-0.5">{anyError}</p>
-            </div>
-          </div>
-        )}
+          {/* Results */}
+          {analysisComplete && !isRunning && !hasError && (
+            <motion.div
+              key="results"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              {/* Action Bar */}
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-4">
+                  <Button
+                    variant="ghost"
+                    onClick={handleNewRecording}
+                    className="text-gray-400 hover:text-white"
+                  >
+                    ← New Recording
+                  </Button>
 
-        {/* Analyzing */}
-        {isCalculating && (
-          <div className="flex items-center gap-3 p-3 rounded-xl border border-primary-500/30 bg-primary-500/10">
-            <Loader size="sm" variant="ai" color="primary" />
-            <p className="text-primary-300 text-sm">
-              {calcM ? 'Extracting performance metrics...' : calcS ? 'Calculating score...' : 'Detecting technique flaws...'}
-            </p>
-          </div>
-        )}
+                  {/* Processing Time Badge */}
+                  {processingTimeMs && (
+                    <ProcessingComplete
+                      timeMs={processingTimeMs}
+                      frameCount={frameCount}
+                    />
+                  )}
+                </div>
 
-        {/* Main grid */}
-        <div className="grid grid-cols-1 xl:grid-cols-5 gap-5">
-
-          {/* Left: Video + skeleton */}
-          <div className="xl:col-span-3">
-            <AnalysisView />
-          </div>
-
-          {/* Right: Score + Flaws */}
-          <div className="xl:col-span-2 flex flex-col gap-4">
-
-            {/* Score Card */}
-            <Card className="p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-white">Performance Score</h3>
-                <span className="text-xs text-gray-500 font-mono">
-                  {selectedSport} / {selectedAction?.replace(/_/g, ' ')}
-                </span>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowVideo(!showVideo)}
+                  >
+                    {showVideo ? 'Hide Video' : 'Show Video'}
+                  </Button>
+                  {!isDemoSession && (
+                    <Button
+                      variant="outline"
+                      onClick={handleReanalyze}
+                    >
+                      Re-analyze
+                    </Button>
+                  )}
+                </div>
               </div>
 
-              {!hasScore ? (
-                <div className="flex flex-col items-center gap-3 py-10 text-center">
-                  {isCalculating ? (
-                    <Loader size="md" variant="ai" color="primary" />
-                  ) : (
-                    <>
-                      <div className="w-14 h-14 rounded-full bg-gray-700/50 flex items-center justify-center text-2xl">
-                        chart
-                      </div>
-                      <p className="text-gray-400 text-sm">
-                        {hasPoseData ? 'Click Re-analyze to score' : 'Waiting for pose data...'}
-                      </p>
-                    </>
-                  )}
-                </div>
-              ) : (
-                <div className="space-y-5">
-                  <div className="flex items-center gap-5">
-                    <ScoreRing score={score!} size="lg" animate glow showScore />
-                    <div className="flex-1 min-w-0">
-                      <div className={`text-4xl font-bold leading-none ${scoreColors(score!).text}`}>{grade}</div>
-                      <div className="text-sm text-gray-300 mt-1 font-medium">{level}</div>
-                      <div className="flex items-center gap-2 mt-3">
-                        <div className="flex-1 h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                          <div className="h-full bg-blue-500 rounded-full" style={{ width: `${(scoreConfidence ?? 0) * 100}%` }} />
-                        </div>
-                        <span className="text-xs text-gray-500 whitespace-nowrap">{Math.round((scoreConfidence ?? 0) * 100)}% conf.</span>
-                      </div>
+              {/* Video (Collapsible) */}
+              <AnimatePresence>
+                {showVideo && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="mb-6 overflow-hidden"
+                  >
+                    <div className="rounded-xl overflow-hidden border border-gray-700">
+                      <AnalysisView />
                     </div>
-                  </div>
-
-                  {sorted.length > 0 && (
-                    <div className="space-y-2.5 pt-1 border-t border-gray-700/50">
-                      <p className="text-xs font-medium text-gray-500 uppercase tracking-wider pt-1">Breakdown</p>
-                      {sorted.map(([key, val]) => {
-                        const c = scoreColors(val);
-                        return (
-                          <div key={key}>
-                            <div className="flex justify-between items-center mb-1">
-                              <span className="text-xs text-gray-300">{metricLabel(key)}</span>
-                              <span className={`text-xs font-mono font-semibold ${c.text}`}>{val}</span>
-                            </div>
-                            <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full transition-all duration-700 ${c.bar}`} style={{ width: `${val}%` }} />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-            </Card>
-
-            {/* Flaws Card */}
-            <Card className="p-5">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-white">Detected Flaws</h3>
-                {flaws.length > 0 && (
-                  <div className="flex gap-1.5">
-                    {highF.length > 0 && <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/20 text-red-400">{highF.length} High</span>}
-                    {medF.length > 0 && <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400">{medF.length} Med</span>}
-                    {lowF.length > 0 && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400">{lowF.length} Low</span>}
-                  </div>
+                  </motion.div>
                 )}
-              </div>
+              </AnimatePresence>
 
-              {injuryRiskLevel !== 'none' && (
-                <div className={`mb-4 p-2.5 rounded-lg border text-xs ${injuryRiskLevel === 'high' ? 'bg-red-500/20 border-red-500/40 text-red-300'
-                    : injuryRiskLevel === 'moderate' ? 'bg-orange-500/20 border-orange-500/40 text-orange-300'
-                      : 'bg-yellow-500/20 border-yellow-500/40 text-yellow-300'
-                  }`}>
-                  Warning: {injuryRiskLevel === 'high' ? 'High' : injuryRiskLevel === 'moderate' ? 'Moderate' : 'Potential'} injury risk detected
-                </div>
-              )}
-
-              {!hasScore ? (
-                <div className="flex flex-col items-center gap-2 py-8 text-center">
-                  <p className="text-gray-400 text-sm">Run analysis to detect flaws</p>
-                </div>
-              ) : flaws.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 py-8 text-center">
-                  <div className="w-12 h-12 rounded-full bg-green-500/20 flex items-center justify-center text-xl">OK</div>
-                  <p className="text-green-400 font-medium text-sm">No significant flaws detected!</p>
-                  <p className="text-gray-500 text-xs">Your technique looks solid. Keep practicing!</p>
-                </div>
-              ) : (
-                <div className="space-y-3 overflow-y-auto max-h-[380px]">
-                  {flaws.map((flaw, i) => {
-                    const cls = severityClasses(flaw.severity);
-                    const [bg, border] = cls.split(' ');
-                    return (
-                      <div key={i} className={`rounded-lg border p-3 ${bg} ${border}`}>
-                        <div className="flex items-start justify-between gap-2 mb-1.5">
-                          <div className="flex items-center gap-1.5">
-                            {flaw.injuryRisk && <span>!</span>}
-                            <span className="font-medium text-white text-sm">{flaw.title}</span>
-                          </div>
-                          <span className={`shrink-0 text-xs px-1.5 py-0.5 rounded border ${cls}`}>{flaw.severity}</span>
-                        </div>
-                        <p className="text-xs text-gray-300 mb-1.5">{flaw.description}</p>
-                        <p className="text-xs"><span className="text-gray-500">Fix: </span><span className="text-gray-200">{flaw.correction}</span></p>
-                        {flaw.drill && <p className="mt-1.5 text-xs text-green-400">🏀 {flaw.drill.name} · {flaw.drill.duration}</p>}
-                        {flaw.actualValue !== undefined && (
-                          <p className="mt-1 text-xs text-gray-600 font-mono">
-                            Measured: {typeof flaw.actualValue === 'number' ? flaw.actualValue.toFixed(1) : flaw.actualValue}
-                            {flaw.idealRange ? ` (ideal: ${flaw.idealRange})` : ''}
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </Card>
-          </div>
-        </div>
-
-        {!hasPoseData && !isCalculating && (
-          <div className="text-center py-10">
-            <p className="text-gray-400 mb-4 text-sm">No pose data available. Process a video first.</p>
-            <Button onClick={() => router.push('/camera')}>Go to Camera</Button>
-          </div>
-        )}
-      </div>
+              {/* Results Dashboard */}
+              <ResultsDashboard
+                score={score}
+                scoreBreakdown={scoreBreakdown}
+                metrics={metrics}
+                flaws={flaws}
+                confidence={Math.round(scoreConfidence * 100) || 95}
+                sport={selectedSport || 'basketball'}
+                action={selectedAction || 'jump_shot'}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </ErrorBoundary>
     </PageContainer>
   );
 }

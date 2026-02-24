@@ -514,14 +514,19 @@ function calculateJumpShotMetrics(
 // ============================================================================
 
 /**
- * Placeholder for free throw metrics
- * TODO: Implement in future iteration
+ * Free Throw Metrics
+ *
+ * A free throw is essentially a stationary jump shot (or set shot).
+ * We reuse the same elbow angle, release angle, stability, and follow-through
+ * helpers; we deliberately skip jump-height because many players use a very
+ * small dip rather than a full jump.
  */
 function calculateFreeThrowMetrics(
-  _input: MetricCalculationInput
+  input: MetricCalculationInput
 ): MetricResult {
-  console.log('[BasketballMetrics] Free throw analysis not yet implemented');
-  return {
+  const { smoothedFrames, keyframes, fps } = input;
+
+  const metrics: MetricResult = {
     releaseAngle: null,
     elbowAngleAtRelease: null,
     kneeAnglePush: null,
@@ -529,23 +534,341 @@ function calculateFreeThrowMetrics(
     followThroughScore: null,
     rhythmConsistency: null,
   };
+
+  if (!smoothedFrames.length || fps <= 0) return metrics;
+
+  const releaseFrameIndex: number | null =
+    (typeof keyframes.release === 'number' ? keyframes.release : null) ??
+    (typeof keyframes.peakJump === 'number' ? keyframes.peakJump : null);
+
+  let shootingHand: 'left' | 'right' = 'right';
+  if (releaseFrameIndex !== null && smoothedFrames[releaseFrameIndex]) {
+    shootingHand = detectShootingHand(smoothedFrames[releaseFrameIndex]);
+  }
+
+  const landmarks = getShootingSideLandmarks(shootingHand);
+
+  // Release angle (same as jump shot)
+  if (releaseFrameIndex !== null && smoothedFrames[releaseFrameIndex]) {
+    const rf = smoothedFrames[releaseFrameIndex];
+    const wrist = getLandmark(rf, landmarks.wrist);
+    const elbow = getLandmark(rf, landmarks.elbow);
+    metrics.releaseAngle = calculateReleaseAngle(wrist, elbow);
+    metrics.elbowAngleAtRelease = calculateElbowAngleAtRelease(rf, landmarks);
+  }
+
+  // Leg drive (knee angle at release, not jump peak — player may barely jump)
+  const pushFrame = releaseFrameIndex ?? Math.floor(smoothedFrames.length / 2);
+  if (smoothedFrames[pushFrame]) {
+    metrics.kneeAnglePush = calculateKneeAngleAtPeak(smoothedFrames[pushFrame], landmarks);
+  }
+
+  // Stability — free throws require excellent balance
+  metrics.stabilityIndex = calculateStabilityIndex(
+    smoothedFrames,
+    keyframes.start,
+    releaseFrameIndex
+  );
+
+  // Follow through
+  if (releaseFrameIndex !== null) {
+    metrics.followThroughScore = calculateFollowThroughScore(
+      smoothedFrames,
+      releaseFrameIndex,
+      landmarks
+    );
+  }
+
+  // Rhythm consistency: variance of wrist Y position in the setup window
+  // Small variance = consistent pre-shot routine → good rhythm
+  if (keyframes.start !== null && releaseFrameIndex !== null && releaseFrameIndex > (keyframes.start ?? 0)) {
+    const start = keyframes.start ?? 0;
+    const ys: number[] = [];
+    for (let i = start; i <= releaseFrameIndex; i++) {
+      const w = getLandmark(smoothedFrames[i], landmarks.wrist);
+      if (w) ys.push(w.y);
+    }
+    if (ys.length >= 4) {
+      const mean = ys.reduce((a, b) => a + b, 0) / ys.length;
+      const variance = ys.reduce((sum, y) => sum + (y - mean) ** 2, 0) / ys.length;
+      // Convert variance to 0-100 score: lower variance is better
+      // typical range: 0-0.002 variance; 0 = 100, ≥0.002 = 0
+      const rhythmScore = Math.max(0, 100 - (variance / 0.002) * 100);
+      metrics.rhythmConsistency = Math.round(rhythmScore);
+    }
+  }
+
+  console.log('[BasketballMetrics] Free throw metrics calculated:', metrics);
+  return metrics;
 }
 
 /**
- * Placeholder for layup metrics
- * TODO: Implement in future iteration
+ * Layup Metrics
+ *
+ * A layup involves an approach run, a single-leg takeoff, and a
+ * close-range finish. We estimate approach speed from hip displacement,
+ * takeoff angle from the body trajectory, and finish hand position.
  */
 function calculateLayupMetrics(
-  _input: MetricCalculationInput
+  input: MetricCalculationInput
 ): MetricResult {
-  console.log('[BasketballMetrics] Layup analysis not yet implemented');
-  return {
+  const { smoothedFrames: frames, keyframes, fps } = input;
+
+  const metrics: MetricResult = {
     approachSpeed: null,
     takeoffAngle: null,
     peakHeight: null,
-    bodyControl: null,
-    finishingHandPosition: null,
+    stabilityIndex: null,
+    finishHandPosition: null,
   };
+
+  if (!frames.length || fps <= 0) return metrics;
+
+  const startF = keyframes.start ?? 0;
+  const endF = keyframes.end ?? frames.length - 1;
+  const peakF = keyframes.peakJump ?? Math.floor((startF + endF) / 2);
+  const releaseF = keyframes.release ?? peakF;
+
+  // ── Approach speed (normalised hip displacement rate) ──────────────────
+  // Measure horizontal hip movement over the 8 frames before takeoff
+  const approachStart = Math.max(0, startF - 8);
+  {
+    const sf = frames[approachStart];
+    const ef = frames[startF];
+    if (sf && ef) {
+      const slh = getLandmark(sf, LandmarkIndex.LEFT_HIP);
+      const srh = getLandmark(sf, LandmarkIndex.RIGHT_HIP);
+      const elh = getLandmark(ef, LandmarkIndex.LEFT_HIP);
+      const erh = getLandmark(ef, LandmarkIndex.RIGHT_HIP);
+      if (slh && srh && elh && erh) {
+        const startX = (slh.x + srh.x) / 2;
+        const endX = (elh.x + erh.x) / 2;
+        const durationSec = (startF - approachStart) / fps;
+        if (durationSec > 0) {
+          // Body-width-normalised speed in units/sec → 0-100 score
+          const ls = getLandmark(sf, LandmarkIndex.LEFT_SHOULDER);
+          const rs = getLandmark(sf, LandmarkIndex.RIGHT_SHOULDER);
+          const bodyWidth = ls && rs ? Math.abs(rs.x - ls.x) : 0.15;
+          const rawSpeed = Math.abs(endX - startX) / durationSec;
+          const ref = Math.max(bodyWidth, 0.05) * 8; // 8 body-widths/sec = fast
+          metrics.approachSpeed = Math.round(Math.min(100, (rawSpeed / ref) * 100));
+        }
+      }
+    }
+  }
+
+  // ── Takeoff angle ───────────────────────────────────────────────────────
+  // Angle of hip trajectory (horizontal vs vertical movement) in degrees
+  {
+    const bf = frames[startF]; // frame at start of jump (takeoff)
+    const pf = frames[peakF];
+    if (bf && pf) {
+      const blh = getLandmark(bf, LandmarkIndex.LEFT_HIP);
+      const brh = getLandmark(bf, LandmarkIndex.RIGHT_HIP);
+      const plh = getLandmark(pf, LandmarkIndex.LEFT_HIP);
+      const prh = getLandmark(pf, LandmarkIndex.RIGHT_HIP);
+      if (blh && brh && plh && prh) {
+        const dx = Math.abs(((plh.x + prh.x) / 2) - ((blh.x + brh.x) / 2));
+        const dy = Math.abs(((plh.y + prh.y) / 2) - ((blh.y + brh.y) / 2));
+        if (dy > 0.001) {
+          metrics.takeoffAngle = Math.round(
+            Math.atan2(dy, dx) * (180 / Math.PI)
+          );
+        }
+      }
+    }
+  }
+
+  // ── Peak height ─────────────────────────────────────────────────────────
+  metrics.peakHeight = calculateJumpHeightNormalized(frames, fps, keyframes);
+
+  // ── Stability (body control through the approach) ───────────────────────
+  metrics.stabilityIndex = calculateStabilityIndex(frames, startF, releaseF);
+
+  // ── Finish hand position (wrist height at release as % body height) ─────
+  {
+    const rf = frames[releaseF];
+    if (rf) {
+      const side = detectShootingHand(rf);
+      const lmIdx = getShootingSideLandmarks(side);
+      const wrist = getLandmark(rf, lmIdx.wrist);
+      const lAnkle = getLandmark(rf, LandmarkIndex.LEFT_ANKLE);
+      const rAnkle = getLandmark(rf, LandmarkIndex.RIGHT_ANKLE);
+      const lSh = getLandmark(rf, LandmarkIndex.LEFT_SHOULDER);
+      const rSh = getLandmark(rf, LandmarkIndex.RIGHT_SHOULDER);
+      if (wrist && (lAnkle || rAnkle) && (lSh || rSh)) {
+        const ankleY = lAnkle && rAnkle ? (lAnkle.y + rAnkle.y) / 2 : (lAnkle ?? rAnkle)!.y;
+        const sY = lSh && rSh ? (lSh.y + rSh.y) / 2 : (lSh ?? rSh)!.y;
+        const bodyH = ankleY - sY;
+        if (bodyH > 0.05) {
+          metrics.finishHandPosition = Math.round(
+            Math.max(0, Math.min(130, ((ankleY - wrist.y) / bodyH) * 100))
+          );
+        }
+      }
+    }
+  }
+
+  console.log('[BasketballMetrics] Layup metrics calculated:', metrics);
+  return metrics;
+}
+
+// ============================================================================
+// DRIBBLING CALCULATOR
+// ============================================================================
+
+/**
+ * Calculates metrics for basketball dribbling
+ *
+ * Dribbling stance quality is evaluated from average posture across multiple
+ * frames — unlike jump-shot analysis, no single key-frame is needed.
+ *
+ * Metrics:
+ *   kneesBent    – average knee angle (°); lower = deeper stance
+ *   stanceWidth  – ankle separation normalised to shoulder width (%)
+ *   balanceScore – lateral hip-centre consistency across frames (0–100)
+ *   trunkLean    – average forward torso lean (°)
+ */
+function calculateDribblingMetrics(
+  input: MetricCalculationInput
+): MetricResult {
+  const { smoothedFrames: frames, fps } = input;
+
+  const metrics: MetricResult = {
+    kneeBendScore: null,
+    stanceWidth: null,
+    balanceScore: null,
+    trunkLean: null,
+  };
+
+  if (!frames || frames.length === 0 || fps <= 0) return metrics;
+
+  // Sample evenly — aim for ~20 representative frames
+  const step = Math.max(1, Math.floor(frames.length / 20));
+  const samples: NormalizedLandmark[][] = [];
+  for (let i = 0; i < frames.length; i += step) {
+    if (frames[i]) samples.push(frames[i]);
+  }
+
+  if (samples.length < 3) return metrics;
+
+  // ── 1. Knee Bend Score (hip drop ratio) ─────────────────────────
+  //
+  // WHY NOT knee angle?
+  // Knee flex is a sagittal (front-to-back) motion. A front-facing camera
+  // cannot capture it via 2D x/y coordinates. Any 2D angle calculation from
+  // a front camera produces junk — regardless of video orientation.
+  //
+  // WHAT WE USE INSTEAD: how low the hips are relative to full body height.
+  //   hipRelativeY = (hipCenterY – shoulderCenterY) / (ankleCenterY – shoulderCenterY)
+  //   • Standing upright: ~0.50 (hips half-way down the torso+leg segment)
+  //   • Professional dribble stance: ~0.68-0.78 (hips dropped right down)
+  //
+  // This is pure Y-axis, completely aspect-ratio-independent, and directly
+  // correlated with knee bend depth.
+  const hipDropRatios: number[] = [];
+  for (const frame of samples) {
+    const lSh = getLandmark(frame, LandmarkIndex.LEFT_SHOULDER);
+    const rSh = getLandmark(frame, LandmarkIndex.RIGHT_SHOULDER);
+    const lHip = getLandmark(frame, LandmarkIndex.LEFT_HIP);
+    const rHip = getLandmark(frame, LandmarkIndex.RIGHT_HIP);
+    const lAnk = getLandmark(frame, LandmarkIndex.LEFT_ANKLE);
+    const rAnk = getLandmark(frame, LandmarkIndex.RIGHT_ANKLE);
+
+    if (lSh && rSh && lHip && rHip && lAnk && rAnk) {
+      const shY = (lSh.y + rSh.y) / 2;
+      const hipY = (lHip.y + rHip.y) / 2;
+      const ankY = (lAnk.y + rAnk.y) / 2;
+
+      const bodyHeight = ankY - shY;
+      if (bodyHeight > 0.15) {
+        const ratio = (hipY - shY) / bodyHeight;
+        hipDropRatios.push(ratio);
+      }
+    }
+  }
+  if (hipDropRatios.length > 0) {
+    const avgRatio = hipDropRatios.reduce((a, b) => a + b, 0) / hipDropRatios.length;
+    // Map ratio to 0-100 score
+    // 0.45 (very upright) → 0;  0.78 (deep dribble stance) → 100
+    const score = ((avgRatio - 0.45) / (0.78 - 0.45)) * 100;
+    metrics.kneeBendScore = Math.round(Math.max(0, Math.min(100, score)));
+  }
+
+  // ── 2. Stance width ─────────────────────────────────────────────
+  const widthRatios: number[] = [];
+  for (const frame of samples) {
+    const lAnkle = getLandmark(frame, LandmarkIndex.LEFT_ANKLE);
+    const rAnkle = getLandmark(frame, LandmarkIndex.RIGHT_ANKLE);
+    const lSh = getLandmark(frame, LandmarkIndex.LEFT_SHOULDER);
+    const rSh = getLandmark(frame, LandmarkIndex.RIGHT_SHOULDER);
+
+    if (lAnkle && rAnkle && lSh && rSh) {
+      const ankleW = Math.abs(lAnkle.x - rAnkle.x);
+      const shoulderW = Math.abs(lSh.x - rSh.x);
+      if (shoulderW > 0.03) {
+        widthRatios.push((ankleW / shoulderW) * 100);
+      }
+    }
+  }
+  if (widthRatios.length > 0) {
+    metrics.stanceWidth = Math.round(
+      widthRatios.reduce((a, b) => a + b, 0) / widthRatios.length
+    );
+  }
+
+  // ── 3. Balance score (lateral hip consistency) ──────────────────
+  const hipXPositions: number[] = [];
+  for (const frame of samples) {
+    const lHip = getLandmark(frame, LandmarkIndex.LEFT_HIP);
+    const rHip = getLandmark(frame, LandmarkIndex.RIGHT_HIP);
+    if (lHip && rHip) {
+      hipXPositions.push((lHip.x + rHip.x) / 2);
+    }
+  }
+  if (hipXPositions.length > 2) {
+    const mean = hipXPositions.reduce((a, b) => a + b, 0) / hipXPositions.length;
+    const variance =
+      hipXPositions.reduce((sum, v) => sum + (v - mean) ** 2, 0) /
+      hipXPositions.length;
+    const stdDev = Math.sqrt(variance);
+    // Normalise: 0 std-dev → 100; ~12% body-width std-dev → 0
+    // Using 0.12 (vs 0.08) because some controlled lateral movement is
+    // normal and expected during active dribbling drills.
+    const raw = 1 - stdDev / 0.12;
+    metrics.balanceScore = Math.round(Math.max(0, Math.min(100, raw * 100)));
+  }
+
+  // ── 4. Trunk lean ───────────────────────────────────────────────
+  const leanAngles: number[] = [];
+  for (const frame of samples) {
+    const lSh = getLandmark(frame, LandmarkIndex.LEFT_SHOULDER);
+    const rSh = getLandmark(frame, LandmarkIndex.RIGHT_SHOULDER);
+    const lHip = getLandmark(frame, LandmarkIndex.LEFT_HIP);
+    const rHip = getLandmark(frame, LandmarkIndex.RIGHT_HIP);
+
+    if (lSh && rSh && lHip && rHip) {
+      const shX = (lSh.x + rSh.x) / 2;
+      const shY = (lSh.y + rSh.y) / 2;
+      const hipX = (lHip.x + rHip.x) / 2;
+      const hipY = (lHip.y + rHip.y) / 2;
+
+      // Angle of trunk from vertical (forward tilt in image space)
+      // dy: positive because shoulder is above hip (image Y increases downward)
+      const dy = hipY - shY;
+      const dx = shX - hipX; // positive = shoulders forward of hips
+      const angleDeg = Math.abs(Math.atan2(dx, dy) * (180 / Math.PI));
+      if (!isNaN(angleDeg)) leanAngles.push(angleDeg);
+    }
+  }
+  if (leanAngles.length > 0) {
+    metrics.trunkLean = Math.round(
+      leanAngles.reduce((a, b) => a + b, 0) / leanAngles.length
+    );
+  }
+
+  console.log('[BasketballMetrics] Dribbling metrics calculated:', metrics);
+  return metrics;
 }
 
 // ============================================================================
@@ -579,9 +902,7 @@ export function calculateBasketballMetrics(
       return calculateLayupMetrics(input);
 
     case 'dribbling':
-      // Dribbling analysis requires different approach (temporal patterns)
-      console.log('[BasketballMetrics] Dribbling analysis not yet implemented');
-      return {};
+      return calculateDribblingMetrics(input);
 
     default:
       console.warn(`[BasketballMetrics] Unknown action: ${action}`);

@@ -1,7 +1,8 @@
 'use client'
 
-import React, { useCallback } from 'react'
+import React, { useCallback, useEffect } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { StoreHydration } from '@/components/providers'
 import { useUserStore } from '@/store'
 import { Sport, SPORTS_CONFIG, getSportActions } from '@/types'
@@ -11,12 +12,25 @@ import { Sport, SPORTS_CONFIG, getSportActions } from '@/types'
 // ==========================================
 
 export default function SportsView() {
-  const selectedSport  = useUserStore((state) => state.selectedSport)
+  const selectedSport = useUserStore((state) => state.selectedSport)
   const selectedAction = useUserStore((state) => state.selectedAction)
-  const setSport       = useUserStore((state) => state.setSport)
-  const setAction      = useUserStore((state) => state.setAction)
+  const setSport = useUserStore((state) => state.setSport)
+  const setAction = useUserStore((state) => state.setAction)
 
-  const allSports   = Object.values(SPORTS_CONFIG)
+  const searchParams = useSearchParams()
+
+  // Pre-select sport passed via ?sport= query param (e.g. from home page sport cards)
+  useEffect(() => {
+    const param = searchParams.get('sport') as Sport | null
+    if (param && SPORTS_CONFIG[param]) {
+      setSport(param)
+      setAction(null)
+    }
+    // Only on mount / when params change — ignore selectedSport to avoid resetting user clicks
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
+
+  const allSports = Object.values(SPORTS_CONFIG)
   const sportActions = selectedSport ? getSportActions(selectedSport) : []
 
   const handleSelectSport = useCallback((sport: Sport) => {

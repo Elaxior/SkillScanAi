@@ -27,3 +27,9 @@ export {
   detectBasketballFlaws,
   hasInjuryRisk,
 } from './basketballFlaws';
+
+// Volleyball
+export { detectVolleyballFlaws } from './volleyballFlaws';
+
+// Badminton
+export { detectBadmintonFlaws } from './badmintonFlaws';

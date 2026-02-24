@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { cn } from '@/utils/cn'
 
 // ==========================================
@@ -18,7 +18,7 @@ export interface ScoreRingProps {
   showScore?: boolean
   /** Label below score */
   label?: string
-  /** Custom color override */
+  /** Custom color override (hex) — disables gradient */
   color?: string
   /** Animation duration in ms */
   animationDuration?: number
@@ -31,46 +31,21 @@ export interface ScoreRingProps {
 }
 
 // ==========================================
-// HELPER FUNCTIONS
+// HELPERS
 // ==========================================
 
-// Get color based on score range
-function getScoreColor(score: number): {
-  stroke: string
-  text: string
-  glow: string
-  bg: string
-} {
-  if (score < 30) {
-    return {
-      stroke: '#ef4444', // danger
-      text: 'text-danger-400',
-      glow: 'drop-shadow-[0_0_10px_rgba(239,68,68,0.5)]',
-      bg: 'bg-danger-500/10',
-    }
-  }
-  if (score < 50) {
-    return {
-      stroke: '#f97316', // orange
-      text: 'text-orange-400',
-      glow: 'drop-shadow-[0_0_10px_rgba(249,115,22,0.5)]',
-      bg: 'bg-orange-500/10',
-    }
-  }
-  if (score < 75) {
-    return {
-      stroke: '#eab308', // warning
-      text: 'text-warning-400',
-      glow: 'drop-shadow-[0_0_10px_rgba(234,179,8,0.5)]',
-      bg: 'bg-warning-500/10',
-    }
-  }
-  return {
-    stroke: '#22c55e', // success
-    text: 'text-success-400',
-    glow: 'drop-shadow-[0_0_10px_rgba(34,197,94,0.5)]',
-    bg: 'bg-success-500/10',
-  }
+function getGradientId(score: number): string {
+  if (score >= 80) return 'srGradGreen'
+  if (score >= 60) return 'srGradYellow'
+  return 'srGradRed'
+}
+
+function getScoreTextColor(score: number): string {
+  if (score >= 90) return '#22c55e'
+  if (score >= 80) return '#10b981'
+  if (score >= 70) return '#eab308'
+  if (score >= 60) return '#f97316'
+  return '#ef4444'
 }
 
 // Size configurations
@@ -97,80 +72,84 @@ const ScoreRing: React.FC<ScoreRingProps> = ({
   glow = true,
   className,
 }) => {
-  // State for animation
-  const [displayScore, setDisplayScore] = useState(animate ? 0 : score)
-  const [isAnimating, setIsAnimating] = useState(animate)
+  const clampedScore = Math.min(Math.max(score, 0), 100)
+  const [displayScore, setDisplayScore] = useState(animate ? 0 : clampedScore)
+  const [mounted, setMounted] = useState(false)
+  const scoreRef = useRef(clampedScore)
+  scoreRef.current = clampedScore
 
-  // Get size configuration
   const config = sizeConfig[size]
   const diameter = config.diameter
-  const stroke = strokeWidth || config.defaultStroke
+  const stroke = strokeWidth ?? config.defaultStroke
   const radius = (diameter - stroke) / 2
   const circumference = 2 * Math.PI * radius
-
-  // Clamp score
-  const clampedScore = Math.min(Math.max(score, 0), 100)
-
-  // Get colors
-  const colors = color ? {
-    stroke: color,
-    text: 'text-white',
-    glow: `drop-shadow-[0_0_10px_${color}80]`,
-    bg: `${color}1A`,
-  } : getScoreColor(clampedScore)
-
-  // Calculate stroke offset
   const strokeOffset = circumference - (clampedScore / 100) * circumference
 
-  // Animate score number
+  const gradientId = color ? undefined : getGradientId(clampedScore)
+  const strokeColor = color ?? `url(#${gradientId})`
+  const textColor = color ?? getScoreTextColor(clampedScore)
+
+  // Trigger CSS transition one frame after mount
   useEffect(() => {
-    if (!animate) {
-      setDisplayScore(clampedScore)
-      return
+    const raf = requestAnimationFrame(() => setMounted(true))
+    return () => cancelAnimationFrame(raf)
+  }, [])
+
+  // Animate score counter
+  useEffect(() => {
+    if (!animate) { setDisplayScore(clampedScore); return }
+    const start = Date.now()
+    const tick = () => {
+      const t = Math.min((Date.now() - start) / animationDuration, 1)
+      const eased = 1 - Math.pow(1 - t, 3)
+      setDisplayScore(Math.round(eased * scoreRef.current))
+      if (t < 1) requestAnimationFrame(tick)
     }
-
-    setIsAnimating(true)
-    const startTime = Date.now()
-    const startScore = 0
-
-    const animateScore = () => {
-      const elapsed = Date.now() - startTime
-      const progress = Math.min(elapsed / animationDuration, 1)
-      
-      // Easing function (ease-out cubic)
-      const easeOutCubic = 1 - Math.pow(1 - progress, 3)
-      
-      const currentScore = Math.round(startScore + (clampedScore - startScore) * easeOutCubic)
-      setDisplayScore(currentScore)
-
-      if (progress < 1) {
-        requestAnimationFrame(animateScore)
-      } else {
-        setIsAnimating(false)
-      }
-    }
-
-    requestAnimationFrame(animateScore)
+    requestAnimationFrame(tick)
   }, [clampedScore, animate, animationDuration])
 
+  const currentOffset = mounted ? strokeOffset : circumference
+
   return (
-    <div
-      className={cn(
-        'relative inline-flex flex-col items-center justify-center',
-        className
-      )}
-    >
-      {/* SVG Ring */}
+    <div className={cn('relative inline-flex flex-col items-center justify-center', className)}>
       <svg
         width={diameter}
         height={diameter}
-        className={cn(
-          'transform -rotate-90',
-          glow && colors.glow,
-          'transition-[filter] duration-300'
-        )}
+        viewBox={`0 0 ${diameter} ${diameter}`}
+        className="transform -rotate-90"
       >
-        {/* Background circle (track) */}
+        <defs>
+          {/* Green → cyan gradient (score ≥ 80) */}
+          <linearGradient id="srGradGreen" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#22c55e" />
+            <stop offset="100%" stopColor="#06b6d4" />
+          </linearGradient>
+
+          {/* Yellow → orange gradient (score 60–79) */}
+          <linearGradient id="srGradYellow" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#eab308" />
+            <stop offset="100%" stopColor="#f97316" />
+          </linearGradient>
+
+          {/* Orange → red gradient (score < 60) */}
+          <linearGradient id="srGradRed" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#f97316" />
+            <stop offset="100%" stopColor="#ef4444" />
+          </linearGradient>
+
+          {/* Glow filter */}
+          {glow && (
+            <filter id="srGlow" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur stdDeviation="3" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          )}
+        </defs>
+
+        {/* Track */}
         <circle
           cx={diameter / 2}
           cy={diameter / 2}
@@ -178,72 +157,48 @@ const ScoreRing: React.FC<ScoreRingProps> = ({
           fill="none"
           stroke="currentColor"
           strokeWidth={stroke}
-          className="text-surface-border"
+          className="text-gray-800"
         />
 
-        {/* Progress circle */}
+        {/* Progress arc */}
         <circle
           cx={diameter / 2}
           cy={diameter / 2}
           r={radius}
           fill="none"
-          stroke={colors.stroke}
+          stroke={strokeColor}
           strokeWidth={stroke}
           strokeLinecap="round"
           strokeDasharray={circumference}
-          strokeDashoffset={isAnimating ? circumference : strokeOffset}
-          className="transition-[stroke-dashoffset] ease-out"
-          style={{
-            transitionDuration: `${animationDuration}ms`,
-            ['--circumference' as string]: circumference,
-            ['--dash-offset' as string]: strokeOffset,
-          }}
+          strokeDashoffset={currentOffset}
+          filter={glow ? 'url(#srGlow)' : undefined}
+          style={{ transition: `stroke-dashoffset ${animationDuration}ms cubic-bezier(0.16,1,0.3,1)` }}
         />
-
-        {/* Glow effect circle (optional decorative) */}
-        {glow && (
-          <circle
-            cx={diameter / 2}
-            cy={diameter / 2}
-            r={radius}
-            fill="none"
-            stroke={colors.stroke}
-            strokeWidth={stroke / 2}
-            strokeLinecap="round"
-            strokeDasharray={circumference}
-            strokeDashoffset={isAnimating ? circumference : strokeOffset}
-            className="opacity-50 blur-sm transition-[stroke-dashoffset] ease-out"
-            style={{
-              transitionDuration: `${animationDuration}ms`,
-            }}
-          />
-        )}
       </svg>
 
       {/* Center content */}
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        {showScore && (
+      {showScore && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
           <span
-            className={cn(
-              'font-bold tabular-nums',
-              config.fontSize,
-              colors.text
-            )}
+            className={cn('font-bold tabular-nums', config.fontSize)}
+            style={{
+              color: textColor,
+              transition: 'color 0.5s ease',
+            }}
           >
             {displayScore}
           </span>
-        )}
-        {label && (
-          <span
-            className={cn(
-              'text-text-secondary font-medium mt-1',
-              config.labelSize
-            )}
-          >
-            {label}
-          </span>
-        )}
-      </div>
+          {label ? (
+            <span className={cn('text-gray-400 font-medium mt-1', config.labelSize)}>
+              {label}
+            </span>
+          ) : (
+            <span className={cn('text-gray-500 mt-1', config.labelSize === 'text-xs' ? 'text-[10px]' : 'text-xs')}>
+              / 100
+            </span>
+          )}
+        </div>
+      )}
     </div>
   )
 }

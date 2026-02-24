@@ -167,7 +167,7 @@ const initialState: SessionState = {
   fps: null,
   metrics: {},
   score: null,
-  flaws: [],
+  flaws: [], // Empty array — avoids null checks in consumers
   timestamps: {
     createdAt: null,
     recordingStartedAt: null,
@@ -177,7 +177,6 @@ const initialState: SessionState = {
   error: null,
   scoreBreakdown: {},
   scoreConfidence: 0,
-  flaws: [], // Empty array — avoids null checks in consumers
   injuryRiskLevel: 'none' as const,
 
   // Computed

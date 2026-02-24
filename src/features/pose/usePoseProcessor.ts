@@ -105,6 +105,17 @@ const initialState: PoseProcessorState = {
   isModelLoaded: false,
 }
 
+// ============================================================================
+// MODULE-LEVEL SINGLETON
+// Shared across hook instances and React Strict Mode re-mounts.
+// Ensures only one MediaPipe WASM instance exists at a time, preventing
+// the "Module.arguments has been replaced with arguments_" crash from
+// two overlapping Pose initializations.
+// ============================================================================
+
+let _globalPose: InstanceType<typeof Pose> | null = null;
+let _globalPoseInitializing: Promise<InstanceType<typeof Pose>> | null = null;
+
 // ==========================================
 // HOOK IMPLEMENTATION
 // ==========================================
@@ -163,16 +174,27 @@ export function usePoseProcessor(
   const initializePose = useCallback(async (): Promise<Pose> => {
     console.log('[usePoseProcessor] Initializing MediaPipe Pose...')
 
-    // Return existing instance if available
-    if (poseRef.current) {
-      console.log('[usePoseProcessor] Using existing Pose instance')
-      return poseRef.current
+    // Return existing module-level singleton (survives Strict Mode re-mounts)
+    if (_globalPose) {
+      console.log('[usePoseProcessor] Using existing global Pose singleton')
+      poseRef.current = _globalPose
+      if (isMountedRef.current) setIsModelLoaded(true)
+      return _globalPose
+    }
+
+    // If already initializing in another instance, wait for that promise
+    if (_globalPoseInitializing) {
+      console.log('[usePoseProcessor] Waiting for in-progress initialization...')
+      const pose = await _globalPoseInitializing
+      poseRef.current = pose
+      if (isMountedRef.current) setIsModelLoaded(true)
+      return pose
     }
 
     setStatus('loading-model')
     updateProgress({ status: 'loading-model' })
 
-    return new Promise((resolve, reject) => {
+    _globalPoseInitializing = new Promise((resolve, reject) => {
       try {
         const pose = new Pose({
           locateFile: (file) => {
@@ -194,23 +216,29 @@ export function usePoseProcessor(
         // Initialize the model
         pose.initialize().then(() => {
           console.log('[usePoseProcessor] Pose model initialized')
+          _globalPose = pose
+          _globalPoseInitializing = null
           poseRef.current = pose
-          
+
           if (isMountedRef.current) {
             setIsModelLoaded(true)
           }
-          
+
           resolve(pose)
         }).catch((err) => {
           console.error('[usePoseProcessor] Failed to initialize:', err)
+          _globalPoseInitializing = null
           reject(err)
         })
 
       } catch (err) {
         console.error('[usePoseProcessor] Error creating Pose:', err)
+        _globalPoseInitializing = null
         reject(err)
       }
     })
+
+    return _globalPoseInitializing
   }, [modelComplexity, smoothLandmarks, minDetectionConfidence, minTrackingConfidence, updateProgress])
 
   // ==========================================
@@ -252,16 +280,24 @@ export function usePoseProcessor(
         await new Promise<void>((resolve, reject) => {
           const timeout = setTimeout(() => {
             reject(new Error('Video load timeout'))
-          }, 10000)
+          }, 30000)
 
-          video.onloadeddata = () => {
+          // Use addEventListener so multiple concurrent processVideo calls
+          // (e.g. from React Strict Mode double-mount) don't overwrite each other.
+          const onLoaded = () => {
             clearTimeout(timeout)
+            video.removeEventListener('loadeddata', onLoaded)
+            video.removeEventListener('error', onError)
             resolve()
           }
-          video.onerror = () => {
+          const onError = () => {
             clearTimeout(timeout)
+            video.removeEventListener('loadeddata', onLoaded)
+            video.removeEventListener('error', onError)
             reject(new Error('Video load error'))
           }
+          video.addEventListener('loadeddata', onLoaded)
+          video.addEventListener('error', onError)
         })
       }
 
@@ -431,17 +467,20 @@ export function usePoseProcessor(
       return detectionResult
 
     } catch (err) {
-      console.error('[usePoseProcessor] Processing error:', err)
-      
       const errorMessage = err instanceof Error ? err.message : 'Unknown error'
-      
-      if (isMountedRef.current) {
-        setError(errorMessage)
-        setStatus('error')
-        updateProgress({
-          status: 'error',
-          error: errorMessage,
-        })
+
+      const isExpectedCancellation =
+        errorMessage.includes('Video load timeout') ||
+        errorMessage.includes('cancelled') ||
+        isCancelledRef.current
+
+      if (!isExpectedCancellation) {
+        console.error('[usePoseProcessor] Processing error:', err)
+        if (isMountedRef.current) {
+          setError(errorMessage)
+          setStatus('error')
+          updateProgress({ status: 'error', error: errorMessage })
+        }
       }
 
       return null
@@ -471,7 +510,7 @@ export function usePoseProcessor(
   const cancel = useCallback(() => {
     console.log('[usePoseProcessor] Cancelling processing')
     isCancelledRef.current = true
-    
+
     if (isMountedRef.current) {
       setStatus('idle')
       updateProgress({
@@ -489,15 +528,13 @@ export function usePoseProcessor(
     isMountedRef.current = true
 
     return () => {
-      console.log('[usePoseProcessor] Cleaning up')
+      console.log('[usePoseProcessor] Cleaning up (keeping global Pose singleton alive)')
       isMountedRef.current = false
       isCancelledRef.current = true
-
-      // Close pose instance
-      if (poseRef.current) {
-        poseRef.current.close()
-        poseRef.current = null
-      }
+      // Do NOT close the Pose instance here — it is shared as a module-level
+      // singleton (_globalPose) and must survive Strict Mode re-mounts.
+      // Closing it would destroy the WASM context for all future uses.
+      poseRef.current = null
     }
   }, [])
 

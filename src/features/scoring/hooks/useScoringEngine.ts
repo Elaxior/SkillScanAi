@@ -8,6 +8,8 @@
 import { useCallback, useState } from 'react';
 import { useSessionStore, useUserStore } from '@/store';
 import { calculateBasketballScore } from '../basketballScoring';
+import { calculateVolleyballScore } from '../volleyballScoring';
+import { calculateBadmintonScore } from '../badmintonScoring';
 import type { ScoringResult } from '../types';
 
 interface UseScoringEngineResult {
@@ -53,7 +55,7 @@ export function useScoringEngine(): UseScoringEngineResult {
     // Read fresh metrics from store to avoid stale closure
     const currentMetrics = useSessionStore.getState().metrics;
 
-    if (!currentMetrics || Object.keys(currentMetrics).length === 0) {
+    if (!currentMetrics) {
       setError('No metrics available for scoring');
       return null;
     }
@@ -69,14 +71,13 @@ export function useScoringEngine(): UseScoringEngineResult {
           result = calculateBasketballScore(currentMetrics, selectedAction);
           break;
 
-        // TODO: Add other sports as they're implemented
         case 'volleyball':
+          result = calculateVolleyballScore(currentMetrics, selectedAction);
+          break;
+
         case 'badminton':
-        case 'cricket':
-        case 'table_tennis':
-          setError(`Scoring for ${selectedSport} is not yet implemented`);
-          setIsCalculating(false);
-          return null;
+          result = calculateBadmintonScore(currentMetrics, selectedAction);
+          break;
 
         default:
           setError(`Unknown sport: ${selectedSport}`);

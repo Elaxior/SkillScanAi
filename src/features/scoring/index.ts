@@ -38,3 +38,11 @@ export {
   basketballJumpShotBenchmarks,
   getBasketballBenchmarks,
 } from './basketballBenchmarks';
+
+// Volleyball
+export { calculateVolleyballScore } from './volleyballScoring';
+export { getVolleyballBenchmarks } from './volleyballBenchmarks';
+
+// Badminton
+export { calculateBadmintonScore } from './badmintonScoring';
+export { getBadmintonBenchmarks } from './badmintonBenchmarks';

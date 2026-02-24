@@ -501,6 +501,102 @@ function detectReleaseTimingIssues(
 }
 
 // ============================================================================
+// DRIBBLING FLAW RULES
+// ============================================================================
+
+function detectStraightKnee(kneeBendScore: number | null): DetectedFlaw | null {
+  if (kneeBendScore === null) return null;
+  if (kneeBendScore >= 35) return null; // Adequate stance depth
+
+  const severity: FlawSeverity = kneeBendScore < 15 ? 'high' : 'medium';
+
+  return {
+    id: 'straight_knee_dribble',
+    severity,
+    category: 'form',
+    affectedBodyParts: ['knee', 'hip'],
+    title: 'Standing Too Upright',
+    description: `Your dribbling stance is too upright (stance depth score ${Math.round(kneeBendScore)}/100). A proper dribbling stance requires bent knees and lowered hips for quick reaction and ball protection.`,
+    actualValue: kneeBendScore,
+    threshold: 35,
+    idealRange: '50–100 (low, bent-knee stance)',
+    correction: 'Bend your knees to lower your centre of gravity. Imagine sitting back into a quarter-squat. This improves explosiveness, balance, and makes you harder to defend.',
+    youtubeUrl: 'https://www.youtube.com/watch?v=wSxbTnBFKa8',
+    youtubeTitle: 'Proper Dribbling Stance - Basketball IQ',
+    injuryRisk: false,
+    confidence: Math.min(1, (35 - kneeBendScore) / 20),
+  };
+}
+
+function detectNarrowDribblingStance(stanceWidth: number | null): DetectedFlaw | null {
+  if (stanceWidth === null) return null;
+  if (stanceWidth >= 70) return null;
+
+  return {
+    id: 'narrow_stance_dribble',
+    severity: 'medium',
+    category: 'balance',
+    affectedBodyParts: ['ankle', 'knee', 'hip'],
+    title: 'Stance Too Narrow',
+    description: `Your feet are close together while dribbling (≈${Math.round(stanceWidth)}% shoulder width). A narrow stance reduces stability and makes you easier to knock off balance.`,
+    actualValue: stanceWidth,
+    threshold: 70,
+    idealRange: '85–125% of shoulder width',
+    correction: 'Widen your stance to at least shoulder width. Plant your feet firmly with toes slightly out to create a solid, balanced base for ball-handling.',
+    youtubeUrl: 'https://www.youtube.com/watch?v=wSxbTnBFKa8',
+    youtubeTitle: 'Improve Your Dribbling Stance - Basketball Training',
+    injuryRisk: false,
+    confidence: Math.min(1, (70 - stanceWidth) / 20),
+  };
+}
+
+function detectWideDribblingStance(stanceWidth: number | null): DetectedFlaw | null {
+  if (stanceWidth === null) return null;
+  if (stanceWidth <= 220) return null; // Wide stances are common in drills
+
+  return {
+    id: 'wide_stance_dribble',
+    severity: 'low',
+    category: 'balance',
+    affectedBodyParts: ['ankle', 'knee'],
+    title: 'Stance Extremely Wide',
+    description: `Your feet are extremely wide (≈${Math.round(stanceWidth)}% shoulder width). While wide stances are normal in drills, this excessive width limits lateral explosiveness.`,
+    actualValue: stanceWidth,
+    threshold: 220,
+    idealRange: '70–180% of shoulder width',
+    correction: 'Bring your feet slightly closer together. This lets you explode in any direction without the extra step needed from a super-wide base.',
+    youtubeUrl: 'https://www.youtube.com/watch?v=wSxbTnBFKa8',
+    youtubeTitle: 'Dribbling Footwork Fundamentals',
+    injuryRisk: false,
+    confidence: Math.min(1, (stanceWidth - 220) / 40),
+  };
+}
+
+function detectPoorDribblingBalance(balanceScore: number | null): DetectedFlaw | null {
+  if (balanceScore === null) return null;
+  if (balanceScore >= 55) return null;
+
+  const severity: FlawSeverity = balanceScore < 35 ? 'high' : 'medium';
+
+  return {
+    id: 'poor_balance_dribble',
+    severity,
+    category: 'balance',
+    affectedBodyParts: ['hip', 'torso', 'full_body'],
+    title: 'Inconsistent Body Balance',
+    description: `Your body sways significantly while dribbling (balance score ${Math.round(balanceScore)}/100). Lateral movement without purpose tips off defenders and reduces control.`,
+    actualValue: balanceScore,
+    threshold: 55,
+    idealRange: '70–100 (minimal sway)',
+    correction: 'Focus on keeping your torso still over your base. Practice stationary dribbling drills — dribble in place while keeping your hips centred.',
+    youtubeUrl: 'https://www.youtube.com/watch?v=gT0kslvtnlI',
+    youtubeTitle: 'Balance and Body Control While Dribbling',
+    injuryRisk: false,
+    confidence: Math.min(1, (55 - balanceScore) / 25),
+  };
+}
+
+// ============================================================================
 // MAIN DETECTION FUNCTION
 // ============================================================================
 
@@ -523,14 +619,63 @@ export function detectBasketballFlaws(
 
   console.log('[BasketballFlaws] Starting flaw detection for action:', action);
 
-  // Only process jump shot for now
+  // ── Dribbling-specific flaw detection ──────────────────────────
+  if (action === 'dribbling') {
+    rulesEvaluated++;
+    const kneeFlaw = detectStraightKnee(metrics.kneeBendScore ?? null);
+    if (kneeFlaw) flaws.push(kneeFlaw);
+
+    rulesEvaluated++;
+    const narrowFlaw = detectNarrowDribblingStance(metrics.stanceWidth ?? null);
+    if (narrowFlaw) flaws.push(narrowFlaw);
+
+    rulesEvaluated++;
+    const wideFlaw = detectWideDribblingStance(metrics.stanceWidth ?? null);
+    if (wideFlaw) flaws.push(wideFlaw);
+
+    rulesEvaluated++;
+    const balanceFlaw = detectPoorDribblingBalance(metrics.balanceScore ?? null);
+    if (balanceFlaw) flaws.push(balanceFlaw);
+
+    const injuryFlaws = flaws.filter((f) => f.injuryRisk);
+    const highSeverityFlaws = flaws.filter((f) => f.severity === 'high');
+    const overallInjuryRisk: FlawDetectionResult['overallInjuryRisk'] = 'none';
+
+    flaws.sort((a, b) => {
+      const severityOrder: Record<FlawSeverity, number> = { high: 0, medium: 1, low: 2 };
+      return severityOrder[a.severity] - severityOrder[b.severity];
+    });
+
+    let summary: string;
+    if (flaws.length === 0) {
+      summary = 'Great dribbling stance! No significant form issues detected.';
+    } else if (highSeverityFlaws.length > 0) {
+      summary = `Detected ${flaws.length} issue(s) with your dribbling posture, including ${highSeverityFlaws.length} high-priority item(s).`;
+    } else {
+      summary = `Detected ${flaws.length} minor issue(s) to improve your dribbling form.`;
+    }
+
+    return { flaws, rulesEvaluated, overallInjuryRisk, summary };
+  }
+
+  // Layup uses overall jump/stability — return empty for now
+  if (action === 'layup') {
+    return {
+      flaws: [],
+      rulesEvaluated: 0,
+      overallInjuryRisk: 'none',
+      summary: 'Layup technique evaluation focuses on scoring metrics above.',
+    };
+  }
+
+  // Only process jump_shot / free_throw below
   if (action !== 'jump_shot' && action !== 'free_throw') {
     console.log('[BasketballFlaws] Action not supported yet:', action);
     return {
       flaws: [],
       rulesEvaluated: 0,
       overallInjuryRisk: 'none',
-      summary: `Flaw detection for ${action} is not yet implemented.`,
+      summary: `Flaw detection for ${action} is not yet available.`,
     };
   }
 
@@ -591,7 +736,7 @@ export function detectBasketballFlaws(
   // Calculate overall injury risk
   const injuryFlaws = flaws.filter((f) => f.injuryRisk);
   const highSeverityFlaws = flaws.filter((f) => f.severity === 'high');
-  
+
   let overallInjuryRisk: FlawDetectionResult['overallInjuryRisk'] = 'none';
   if (injuryFlaws.some((f) => f.severity === 'high')) {
     overallInjuryRisk = 'high';
@@ -651,11 +796,11 @@ export function hasInjuryRisk(metrics: Record<string, number | null>): boolean {
   if (metrics.elbowAngleAtRelease && metrics.elbowAngleAtRelease > 175) {
     return true;
   }
-  
+
   // Check severe instability
   if (metrics.stabilityIndex && metrics.stabilityIndex < 60) {
     return true;
   }
-  
+
   return false;
 }
