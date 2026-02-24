@@ -203,6 +203,7 @@ export function ResultsDashboard({
       {hasScore && (
         <CoachChat
           sport={sport} action={action} score={score as number}
+          confidence={confidence}
           metrics={metrics} scoreBreakdown={scoreBreakdown} flaws={flaws}
         />
       )}

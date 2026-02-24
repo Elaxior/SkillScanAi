@@ -14,6 +14,7 @@ export interface BuildCoachContextArgs {
     sport: string;
     action: string;
     score: number;
+    confidence?: number;
     metrics: Record<string, number | null>;
     scoreBreakdown: Record<string, number>;
     flaws: DetectedFlaw[];
@@ -26,6 +27,7 @@ export function buildCoachContext({
     sport,
     action,
     score,
+    confidence = 95,
     metrics,
     scoreBreakdown,
     flaws,
@@ -34,6 +36,7 @@ export function buildCoachContext({
         sport,
         action,
         overallScore: score,
+        confidence,
         metrics,
         scoreBreakdown,
         flaws: flaws.map((f) => ({

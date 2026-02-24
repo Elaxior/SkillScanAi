@@ -22,6 +22,7 @@ interface CoachChatProps {
     sport: string;
     action: string;
     score: number;
+    confidence?: number;
     metrics: Record<string, number | null>;
     scoreBreakdown: Record<string, number>;
     flaws: DetectedFlaw[];
@@ -31,6 +32,7 @@ export function CoachChat({
     sport,
     action,
     score,
+    confidence = 95,
     metrics,
     scoreBreakdown,
     flaws,
@@ -43,6 +45,7 @@ export function CoachChat({
         sport,
         action,
         score,
+        confidence,
         metrics,
         scoreBreakdown,
         flaws,

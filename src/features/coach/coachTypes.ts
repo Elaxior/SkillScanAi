@@ -14,6 +14,8 @@ export interface CoachContext {
     sport: string;
     action: string;
     overallScore: number;
+    /** Analysis confidence 0-100 (from pose detection coverage) */
+    confidence: number;
     metrics: Record<string, number | null>;
     scoreBreakdown: Record<string, number>;
     flaws: {

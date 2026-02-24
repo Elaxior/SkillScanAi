@@ -99,6 +99,89 @@ function metricLabel(key: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Metric formatting helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Unit suffix for each metric key */
+const METRIC_UNITS: Record<string, string> = {
+    releaseAngle: '°',
+    elbowAngleAtRelease: '°',
+    kneeAngleAtPeak: '°',
+    jumpHeightNormalized: '%',
+    stabilityIndex: '/100',
+    followThroughScore: '/100',
+    releaseTimingMs: 'ms',
+    kneeBendScore: '/100',
+    stanceWidth: '%',
+    balanceScore: '/100',
+    trunkLean: '°',
+    approachSpeed: '/100',
+    takeoffAngle: '°',
+    peakHeight: '%',
+    finishHandPosition: '%',
+    elbowAtContact: '°',
+    contactHeight: '%',
+    armSwingScore: '/100',
+    jumpHeight: '%',
+    trunkRotation: '°',
+    bodyAlignment: '/100',
+    stability: '/100',
+    handSymmetry: '/100',
+    elbowAngle: '°',
+    followThrough: '/100',
+    wristSpeed: '/100',
+    rhythmConsistency: '/100',
+    kneeAnglePush: '°',
+};
+
+/** Human-readable ideal target range for each metric key */
+const METRIC_IDEAL_RANGES: Record<string, string> = {
+    releaseAngle: '48–60°',
+    elbowAngleAtRelease: '152–174°',
+    kneeAngleAtPeak: '162–180°',
+    jumpHeightNormalized: '8–18%',
+    stabilityIndex: '72–100',
+    followThroughScore: '65–100',
+    releaseTimingMs: '-120 to +60 ms',
+    kneeBendScore: '50–100',
+    stanceWidth: '70–180%',
+    balanceScore: '55–100',
+    trunkLean: '5–25°',
+    approachSpeed: '55–100',
+    takeoffAngle: '55–80°',
+    peakHeight: '5–18%',
+    finishHandPosition: '78–110%',
+    elbowAtContact: '155–177°',
+    contactHeight: '85–115%',
+    armSwingScore: '65–100',
+    jumpHeight: '7–20%',
+    trunkRotation: '25–60°',
+    bodyAlignment: '65–100',
+    stability: '75–100',
+    handSymmetry: '78–100',
+    elbowAngle: '90–135°',
+    followThrough: '62–100',
+    wristSpeed: '60–100',
+};
+
+/**
+ * Format a raw metric value with its unit.
+ * Handles fraction→percentage conversion for height/contact metrics.
+ */
+function formatRaw(key: string, value: number | null | undefined): string {
+    if (value === null || value === undefined) return 'not measured';
+    const unit = METRIC_UNITS[key] ?? '';
+    // Height/contact metrics stored as fraction of body height (0.08 = 8%)
+    const isFractionPct = ['jumpHeightNormalized', 'peakHeight', 'jumpHeight'].includes(key);
+    if (isFractionPct) return `${Math.round(value * 100)}%`;
+    if (unit === '°') return `${value.toFixed(1)}°`;
+    if (unit === '%') return `${Math.round(value)}%`;
+    if (unit === '/100') return `${Math.round(value)}/100`;
+    if (unit === 'ms') return `${Math.round(value)} ms`;
+    return `${value.toFixed(1)}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Sport-specific drill banks
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -308,7 +391,7 @@ function classifyIntent(text: string, ctx: CoachContext): Intent {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function buildOpeningMessage(ctx: CoachContext): string {
-    const { sport, action, overallScore, flaws, scoreBreakdown } = ctx;
+    const { sport, action, overallScore, flaws, scoreBreakdown, metrics, confidence } = ctx;
     const label = scoreLabel(overallScore);
     const grade = gradeLetter(overallScore);
     const actionStr = humanAction(action);
@@ -317,6 +400,9 @@ function buildOpeningMessage(ctx: CoachContext): string {
 
     // Headline
     lines.push(`Here's your ${cap(sport)} ${actionStr} breakdown — overall score **${overallScore}/100** (${grade}).`);
+    if (confidence < 80) {
+        lines.push(`⚠️ Analysis confidence: **${confidence}%** — partial body visibility may affect some metric readings.`);
+    }
     lines.push('');
 
     // Score interpretation
@@ -332,16 +418,33 @@ function buildOpeningMessage(ctx: CoachContext): string {
 
     lines.push('');
 
-    // Score breakdown highlights
+    // Full metric breakdown with actual measured values
     const sortedBreakdown = Object.entries(scoreBreakdown).sort(([, a], [, b]) => b - a);
     if (sortedBreakdown.length > 0) {
+        lines.push('**Measured metrics:**');
+        sortedBreakdown.forEach(([key, metScore]) => {
+            const rawVal = metrics[key];
+            const rawStr = rawVal !== null && rawVal !== undefined ? ` (measured: **${formatRaw(key, rawVal)}**)` : '';
+            const idealStr = METRIC_IDEAL_RANGES[key] ? ` — target: ${METRIC_IDEAL_RANGES[key]}` : '';
+            const icon = metScore >= 80 ? '✅' : metScore >= 60 ? '🔶' : '🔴';
+            lines.push(`${icon} ${cap(metricLabel(key))}: **${metScore}/100**${rawStr}${idealStr}`);
+        });
+        lines.push('');
+
         const best = sortedBreakdown[0];
         const worst = sortedBreakdown[sortedBreakdown.length - 1];
         if (best[1] >= 75) {
-            lines.push(`**Strongest metric**: ${cap(metricLabel(best[0]))} at **${best[1]}/100** — this is a genuine asset.`);
+            const bestRaw = metrics[best[0]];
+            const rawNote = bestRaw !== null && bestRaw !== undefined ? ` (${formatRaw(best[0], bestRaw)})` : '';
+            lines.push(`**Strongest metric**: ${cap(metricLabel(best[0]))}${rawNote} at **${best[1]}/100** — this is a genuine asset.`);
         }
         if (worst[1] < 70 && best[0] !== worst[0]) {
-            lines.push(`**Biggest gap**: ${cap(metricLabel(worst[0]))} at **${worst[1]}/100** — this is your highest-leverage improvement area.`);
+            const worstRaw = metrics[worst[0]];
+            const idealRange = METRIC_IDEAL_RANGES[worst[0]];
+            const gapNote = worstRaw !== null && worstRaw !== undefined
+                ? ` — measured at **${formatRaw(worst[0], worstRaw)}**${idealRange ? `, target is ${idealRange}` : ''}`
+                : '';
+            lines.push(`**Biggest gap**: ${cap(metricLabel(worst[0]))} at **${worst[1]}/100**${gapNote}.`);
         }
         lines.push('');
     }
@@ -382,7 +485,7 @@ function buildOverviewResponse(ctx: CoachContext): string {
 }
 
 function buildWorstFlawResponse(ctx: CoachContext): string {
-    const { flaws, scoreBreakdown } = ctx;
+    const { flaws, scoreBreakdown, metrics } = ctx;
     const lines: string[] = [];
 
     if (flaws.length === 0) {
@@ -409,10 +512,14 @@ function buildWorstFlawResponse(ctx: CoachContext): string {
     lines.push(`**What to do:** ${critical.correction}`);
     lines.push('');
 
-    // Worst scoring metric context
+    // Worst scoring metric context with actual value
     const worstMetric = Object.entries(scoreBreakdown).sort(([, a], [, b]) => a - b)[0];
     if (worstMetric && worstMetric[1] < 65) {
-        lines.push(`Your ${metricLabel(worstMetric[0])} score is **${worstMetric[1]}/100** — the lowest in your breakdown. This is directly linked to the flaw above.`);
+        const rawVal = metrics[worstMetric[0]];
+        const rawNote = rawVal !== null && rawVal !== undefined
+            ? ` (measured: **${formatRaw(worstMetric[0], rawVal)}**` + (METRIC_IDEAL_RANGES[worstMetric[0]] ? `, target: ${METRIC_IDEAL_RANGES[worstMetric[0]]})` : ')')
+            : '';
+        lines.push(`Your ${metricLabel(worstMetric[0])} is **${worstMetric[1]}/100**${rawNote} — the lowest in your breakdown.`);
         lines.push('');
     }
 
@@ -507,7 +614,7 @@ function buildInjuryResponse(ctx: CoachContext): string {
 }
 
 function buildProComparisonResponse(ctx: CoachContext): string {
-    const { sport, action, overallScore, scoreBreakdown } = ctx;
+    const { sport, action, overallScore, scoreBreakdown, metrics } = ctx;
     const lines: string[] = [];
 
     const tips = PRO_TIPS[sport]?.[action];
@@ -526,14 +633,17 @@ function buildProComparisonResponse(ctx: CoachContext): string {
     lines.push('• Professional: 90–100');
     lines.push('');
 
-    // Metric-level comparison
+    // Metric-level comparison with actual measured values
     const sortedMetrics = Object.entries(scoreBreakdown).sort(([, a], [, b]) => a - b);
     if (sortedMetrics.length > 0) {
-        lines.push('**Your gap to professional level by metric:**');
+        lines.push('**Your measurements vs professional targets:**');
         sortedMetrics.forEach(([key, score]) => {
-            const gap = 92 - score; // 92 = typical pro floor
-            const bar = gap <= 0 ? '✅ Pro level' : gap <= 10 ? '🔶 Close' : '🔴 Needs work';
-            lines.push(`• ${cap(metricLabel(key))}: ${score}/100 ${bar}`);
+            const rawVal = metrics[key];
+            const rawStr = rawVal !== null && rawVal !== undefined ? `${formatRaw(key, rawVal)} → ` : '';
+            const idealStr = METRIC_IDEAL_RANGES[key] ? ` (pro target: ${METRIC_IDEAL_RANGES[key]})` : '';
+            const gap = 92 - score;
+            const status = gap <= 0 ? '✅ Pro level' : gap <= 10 ? '🔶 Close' : '🔴 Needs work';
+            lines.push(`• ${cap(metricLabel(key))}: **${rawStr}${score}/100**${idealStr} ${status}`);
         });
         lines.push('');
     }
@@ -550,21 +660,24 @@ function buildProComparisonResponse(ctx: CoachContext): string {
 }
 
 function buildScoreMeaningResponse(ctx: CoachContext): string {
-    const { overallScore, scoreBreakdown } = ctx;
+    const { overallScore, scoreBreakdown, metrics, confidence } = ctx;
     const lines: string[] = [];
 
-    lines.push(`Your **${overallScore}/100** score is a weighted average of ${Object.keys(scoreBreakdown).length} biomechanical metrics.`);
+    lines.push(`Your **${overallScore}/100** score is a weighted average of ${Object.keys(scoreBreakdown).length} biomechanical metrics. Analysis confidence: **${confidence}%**.`);
     lines.push('');
     lines.push('**How it\'s calculated:**');
-    lines.push('Each metric (elbow angle, stability, etc.) is scored from 0–100 based on published sports science research benchmarks. Metrics that matter most for performance get higher weights in the final average.');
+    lines.push('Each metric is scored 0–100 based on published sports science benchmarks (Knudson 1993, Okazaki 2015, Miller & Bartlett 1996). Metrics with higher impact on performance get higher weights in the final average.');
     lines.push('');
-    lines.push('**Score breakdown:**');
+    lines.push('**Full breakdown — measured value → score:**');
 
     Object.entries(scoreBreakdown)
         .sort(([, a], [, b]) => b - a)
         .forEach(([key, score]) => {
+            const rawVal = metrics[key];
+            const rawStr = rawVal !== null && rawVal !== undefined ? `${formatRaw(key, rawVal)} → ` : '';
+            const idealStr = METRIC_IDEAL_RANGES[key] ? ` (target: ${METRIC_IDEAL_RANGES[key]})` : '';
             const bar = '█'.repeat(Math.round(score / 10)) + '░'.repeat(10 - Math.round(score / 10));
-            lines.push(`• ${cap(metricLabel(key))}: **${score}/100** [${bar}]`);
+            lines.push(`• ${cap(metricLabel(key))}: **${rawStr}${score}/100**${idealStr} [${bar}]`);
         });
 
     lines.push('');
@@ -614,12 +727,16 @@ function buildMetricSpecificResponse(text: string, ctx: CoachContext): string {
 
     const score = scoreBreakdown[matchedKey];
     const label = metricLabel(matchedKey);
+    const rawVal = ctx.metrics[matchedKey];
     const relatedFlaw = flaws.find(f =>
         f.category.toLowerCase().includes(label.split(' ')[0]) ||
         f.title.toLowerCase().includes(label.split(' ')[0])
     );
 
-    lines.push(`**${cap(label)} — Score: ${score !== undefined ? `${score}/100` : 'not measured'}**`);
+    // Header: show measured value + score + target range
+    const measuredStr = rawVal !== null && rawVal !== undefined ? `measured **${formatRaw(matchedKey, rawVal)}**` : 'not measured';
+    const idealStr = METRIC_IDEAL_RANGES[matchedKey] ? ` · target: ${METRIC_IDEAL_RANGES[matchedKey]}` : '';
+    lines.push(`**${cap(label)}** — ${measuredStr} → scored **${score !== undefined ? `${score}/100` : '—'}**${idealStr}`);
     lines.push('');
 
     if (score === undefined) {
@@ -627,15 +744,24 @@ function buildMetricSpecificResponse(text: string, ctx: CoachContext): string {
         return lines.join('\n');
     }
 
-    // Interpretation
+    // Interpretation with actual gap to target
     if (score >= 85) {
         lines.push(`This is a **strength** — ${score}/100 puts you in the upper range. Maintain this and avoid overworking it.`);
     } else if (score >= 70) {
         lines.push(`This is **solid** at ${score}/100 but has room for refinement. Small improvements here can meaningfully raise your overall score.`);
+        if (rawVal !== null && rawVal !== undefined && METRIC_IDEAL_RANGES[matchedKey]) {
+            lines.push(`Your measured value of **${formatRaw(matchedKey, rawVal)}** is within reach of the target range (${METRIC_IDEAL_RANGES[matchedKey]}).`);
+        }
     } else if (score >= 55) {
-        lines.push(`This is **below target** at ${score}/100. This metric is actively pulling your overall score down.`);
+        lines.push(`This is **below target** at ${score}/100 — it's actively pulling your overall score down.`);
+        if (rawVal !== null && rawVal !== undefined && METRIC_IDEAL_RANGES[matchedKey]) {
+            lines.push(`Measured at **${formatRaw(matchedKey, rawVal)}** vs target of ${METRIC_IDEAL_RANGES[matchedKey]} — this is the gap to close.`);
+        }
     } else {
         lines.push(`At ${score}/100, this is a **significant gap** and likely one of the biggest contributors to your overall score.`);
+        if (rawVal !== null && rawVal !== undefined && METRIC_IDEAL_RANGES[matchedKey]) {
+            lines.push(`Measured at **${formatRaw(matchedKey, rawVal)}** — target is ${METRIC_IDEAL_RANGES[matchedKey]}. This is a priority correction.`);
+        }
     }
 
     lines.push('');

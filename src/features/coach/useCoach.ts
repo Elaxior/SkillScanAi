@@ -25,6 +25,7 @@ interface UseCoachArgs {
     sport: string;
     action: string;
     score: number;
+    confidence?: number;
     metrics: Record<string, number | null>;
     scoreBreakdown: Record<string, number>;
     flaws: DetectedFlaw[];
@@ -49,6 +50,7 @@ export function useCoach({
     sport,
     action,
     score,
+    confidence = 95,
     metrics,
     scoreBreakdown,
     flaws,
@@ -58,7 +60,7 @@ export function useCoach({
     const [error, setError] = useState<string | null>(null);
 
     // Build context once — stable ref so the opening effect only fires once
-    const ctxRef = useRef(buildCoachContext({ sport, action, score, metrics, scoreBreakdown, flaws }));
+    const ctxRef = useRef(buildCoachContext({ sport, action, score, confidence, metrics, scoreBreakdown, flaws }));
 
     useEffect(() => {
         let cancelled = false;
